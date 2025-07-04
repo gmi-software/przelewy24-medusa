@@ -39,8 +39,6 @@ export class P24ApiService {
       language: data.language,
       urlReturn: data.urlReturn,
       urlStatus: data.urlStatus,
-      // remove it later
-      waitForResult: true,
       sign: this.generateSign({
         sessionId: data.sessionId,
         merchantId: parseInt(this.options.merchant_id),
@@ -49,6 +47,8 @@ export class P24ApiService {
         crc: this.options.crc,
       }),
     };
+
+    console.log("requestData sign:", requestData.sign);
 
     return this.makeRequest("/transaction/register", "POST", requestData);
   }
@@ -106,6 +106,26 @@ export class P24ApiService {
   }
 
   /**
+   * Charge payment using BLIK code
+   * This is the main BLIK payment method
+   */
+  async chargeBlikByCode(data: {
+    token: string;
+    blikCode: string;
+  }): Promise<any> {
+    const requestData = {
+      token: data.token,
+      blikCode: data.blikCode,
+    };
+
+    return this.makeRequest(
+      "/paymentMethod/blik/chargeByCode",
+      "POST",
+      requestData
+    );
+  }
+
+  /**
    * Make a generic request to P24 API
    */
   private async makeRequest(
@@ -114,6 +134,10 @@ export class P24ApiService {
     data?: any
   ): Promise<any> {
     const url = `${this.baseURL}${endpoint}`;
+
+    console.log("pos_id", this.options.pos_id);
+    console.log("api_key", this.options.api_key);
+    console.log("url", url);
 
     // P24 uses Basic authentication: pos_id as username, api_key as password
     const credentials = Buffer.from(

@@ -23,13 +23,11 @@ class P24BlikService extends P24Base {
     return PaymentProviderKeys.P24_BLIK;
   }
 
-  // BLIK-specific helper methods
-  static validateBlikCode(code: string): boolean {
-    return /^\d{6}$/.test(code);
-  }
-
-  isOneClickEnabled(): boolean {
-    return (this.options_ as BlikOptions).enable_one_click === true;
+  async chargeBlikPayment(token: string, blikCode: string) {
+    return this.p24Api.chargeBlikByCode({
+      token,
+      blikCode,
+    });
   }
 }
 

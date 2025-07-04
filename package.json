@@ -1,16 +1,24 @@
 {
-  "name": "p24-medusa-plugin",
+  "name": "@gmi/przelewy24-payments-medusa",
   "version": "0.0.1",
   "description": "Przelewy24 (P24) payment integration plugin for Medusa e-commerce with BLIK, cards, and general P24 support.",
-  "author": "Medusa (https://medusajs.com)",
+  "author": "GMI",
   "license": "MIT",
+  "repository": "add_me_later",
   "files": [
     ".medusa/server"
   ],
   "exports": {
     "./package.json": "./package.json",
-    ".": "./.medusa/server/src/index.js",
-    "./services/*": "./.medusa/server/src/services/*.js"
+    "./workflows": "./.medusa/server/src/workflows/index.js",
+    "./.medusa/server/src/modules/*": "./.medusa/server/src/modules/*/index.js",
+    "./providers/*": "./.medusa/server/src/providers/*/index.js",
+    "./admin": {
+      "import": "./.medusa/server/src/admin/index.mjs",
+      "require": "./.medusa/server/src/admin/index.js",
+      "default": "./.medusa/server/src/admin/index.js"
+    },
+    "./*": "./.medusa/server/src/*.js"
   },
   "keywords": [
     "medusa",

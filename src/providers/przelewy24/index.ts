@@ -14,6 +14,8 @@ import P24BlikService from "./services/p24-blik";
 import P24CardsService from "./services/p24-cards";
 import P24ProviderService from "./services/p24-provider";
 
+const services = [P24BlikService, P24CardsService, P24ProviderService];
+
 export default ModuleProvider(Modules.PAYMENT, {
-  services: [P24BlikService, P24CardsService, P24ProviderService],
+  services,
 });

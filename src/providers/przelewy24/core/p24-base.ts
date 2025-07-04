@@ -19,7 +19,7 @@ import {
 import {
   getAmountFromSmallestUnit,
   getSmallestUnit,
-} from "../utils/get-smallest-unit";
+} from "../../../utils/get-smallest-unit";
 import { P24ApiService } from "../services/p24-api";
 
 import {
@@ -144,12 +144,15 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           normalizedParams.description || `Payment ${context?.idempotency_key}`,
         email: customerEmail,
         channel: normalizedParams.channel,
-        urlReturn: this.options_.frontend_url || "http://localhost:3000",
+        // urlReturn: this.options_.frontend_url
+        //   ? `${this.options_.frontend_url}/payment/return?cart_id=${data?.cart_id}`
+        //   : `http://localhost:3000/payment/return?cart_id=${data?.cart_id}`,
+        urlReturn: `http://localhost:8000/payment/return?cart_id=${data?.cart_id}`,
         urlStatus: this.options_.backend_url
           ? `${
               this.options_.backend_url
-            }/hooks/payment/${this.getProviderKey()}_p24-medusa-plugin`
-          : "https://1ee2cf516767dd.lhr.life/hooks/payment/p24-provider_p24-medusa-plugin",
+            }/hooks/payment/${this.getProviderKey()}_przelewy24`
+          : `https://a51b759e2bb8be.lhr.life/hooks/payment/${this.getProviderKey()}_przelewy24`,
       };
 
       console.log(

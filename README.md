@@ -109,7 +109,6 @@ module.exports = defineConfig({
               sandbox: process.env.NODE_ENV !== "production",
               frontend_url: process.env.FRONTEND_URL,
               backend_url: process.env.BACKEND_URL,
-              enable_one_click: true, // BLIK-specific option
             },
           },
           {
@@ -175,12 +174,6 @@ BACKEND_URL=https://your-backend-domain.com
 | `frontend_url` | Frontend URL for customer redirects    | No       | `http://localhost:3000` |
 | `backend_url`  | Backend URL for webhook notifications  | No       | `http://localhost:9000` |
 
-### BLIK Provider Additional Options
-
-| Option             | Description                    | Required | Default |
-| ------------------ | ------------------------------ | -------- | ------- |
-| `enable_one_click` | Enable one-click BLIK payments | No       | `false` |
-
 ## Webhook Configuration
 
 ### Webhook URLs
@@ -219,6 +212,10 @@ The plugin accepts the following parameters in the `data` object:
 
 #### BLIK Payment
 
+BLIK payments use a two-phase flow:
+
+**Phase 1: Create Payment Session**
+
 ```typescript
 // Create payment session for BLIK
 const paymentSession = await medusa.payment.createPaymentSession({
@@ -231,28 +228,26 @@ const paymentSession = await medusa.payment.createPaymentSession({
   },
   context: {
     email: "customer@example.com",
-    // For regular BLIK, collect code from user
-    extra: {
-      blik_code: "123456", // 6-digit BLIK code
-    },
   },
 });
 
-// For one-click BLIK
-const oneClickSession = await medusa.payment.createPaymentSession({
-  provider_id: "p24-blik",
-  amount: 10000,
-  currency_code: "PLN",
-  data: {
-    country: "PL",
-    language: "pl",
+// Response includes session_id and token, but no redirect_url
+console.log(paymentSession.data.session_id); // Use this for BLIK processing
+```
+
+**Phase 2: Process BLIK Code**
+
+```typescript
+// Call internal API to process BLIK code
+const blikResponse = await fetch("/admin/plugin/blik", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
   },
-  context: {
-    email: "customer@example.com",
-    extra: {
-      blik_uid: "user_blik_uid", // One-click BLIK UID
-    },
-  },
+  body: JSON.stringify({
+    token: paymentSession.data.token, // Token from payment session
+    blikCode: "123456", // 6-digit BLIK code from user
+  }),
 });
 ```
 
@@ -305,11 +300,15 @@ window.location.href = paymentSession.data.redirect_url;
 
 ### 1. BLIK Payment Flow
 
-1. Customer enters BLIK code (6 digits)
-2. Payment session is created with BLIK code
-3. Customer confirms payment on mobile device
-4. Webhook notification confirms payment
-5. Order is completed
+1. **Phase 1**: Frontend creates payment session via `initiatePayment`
+2. **Phase 2**: Frontend collects BLIK code (6 digits) from customer
+3. **Phase 3**: Frontend calls internal API `/admin/plugin/blik` with BLIK code
+4. **Phase 4**: Backend calls P24 BLIK API to charge the payment
+5. **Phase 5**: Customer confirms payment on mobile device
+6. **Phase 6**: P24 sends webhook notification confirming payment
+7. **Phase 7**: Order is completed
+
+**Note**: BLIK payments don't use redirect URLs. The entire flow happens through API calls.
 
 ### 2. Card Payment Flow
 

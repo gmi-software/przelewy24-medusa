@@ -100,6 +100,25 @@ export interface P24WebhookPayload {
   sign: string;
 }
 
+/**
+ * BLIK API response structure
+ */
+export interface P24BlikResponse {
+  responseCode: number;
+  data: {
+    orderId: number;
+    message: string;
+  };
+}
+
+/**
+ * BLIK charge by code request data
+ */
+export interface P24BlikChargeByCodeData {
+  token: string;
+  blikCode: string;
+}
+
 export interface BlikOptions extends P24Options {
   enable_one_click?: boolean;
 }
