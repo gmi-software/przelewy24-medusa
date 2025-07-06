@@ -28,7 +28,7 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     const posId = process.env.P24_POS_ID;
     const apiKey = process.env.P24_API_KEY;
-    const sandbox = process.env.NODE_ENV !== "production";
+    const sandbox = process.env.P24_IS_SANDBOX;
 
     if (!posId || !apiKey) {
       logger.error(
