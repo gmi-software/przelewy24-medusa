@@ -61,6 +61,14 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     if (!isDefined(options.crc)) {
       throw new Error("Required option `crc` is missing in P24 plugin");
     }
+    if (!isDefined(options.frontend_url)) {
+      throw new Error(
+        "Required option `frontend_url` is missing in P24 plugin"
+      );
+    }
+    if (!isDefined(options.backend_url)) {
+      throw new Error("Required option `backend_url` is missing in P24 plugin");
+    }
   }
 
   protected constructor(cradle: Record<string, unknown>, options: P24Options) {
@@ -138,21 +146,15 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         amount: getSmallestUnit(Number(amount), currency_code),
         country: country,
         language: language,
-        // currency: currency_code.toUpperCase(),
-        currency: "PLN",
+        currency: currency_code.toUpperCase(),
         description:
           normalizedParams.description || `Payment ${context?.idempotency_key}`,
         email: customerEmail,
         channel: normalizedParams.channel,
-        // urlReturn: this.options_.frontend_url
-        //   ? `${this.options_.frontend_url}/payment/return?cart_id=${data?.cart_id}`
-        //   : `http://localhost:3000/payment/return?cart_id=${data?.cart_id}`,
-        urlReturn: `http://localhost:8000/payment/return?cart_id=${data?.cart_id}`,
-        urlStatus: this.options_.backend_url
-          ? `${
-              this.options_.backend_url
-            }/hooks/payment/${this.getProviderKey()}_przelewy24`
-          : `https://a51b759e2bb8be.lhr.life/hooks/payment/${this.getProviderKey()}_przelewy24`,
+        urlReturn: `${this.options_.frontend_url}/payment/return?cart_id=${data?.cart_id}`,
+        urlStatus: `${
+          this.options_.backend_url
+        }/hooks/payment/${this.getProviderKey()}_przelewy24`,
       };
 
       console.log(
@@ -379,8 +381,20 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     };
   }
 
+  /**
+   * Refunds an amount using the P24 payment provider.
+   *
+   * This method is triggered when the admin user refunds a payment of an order.
+   * It creates a refund request to P24 using the transaction/refund endpoint.
+   *
+   * The method uses the session ID and order ID from the payment data to identify
+   * the transaction to refund, and generates a unique UUID for tracking the refund.
+   *
+   * @param input - The input to refund the payment containing amount and payment data
+   * @returns The payment data with refund information and status
+   */
   async refundPayment(input: RefundPaymentInput): Promise<RefundPaymentOutput> {
-    const { data: paymentData, amount: refundAmount } = input;
+    const { data: paymentData, amount: refundAmount, context } = input;
     const sessionId = paymentData?.session_id as string;
     const orderId = paymentData?.order_id as number;
 
@@ -393,24 +407,55 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
     try {
       const currencyCode = (paymentData?.currency as string) || "PLN";
+
+      const refundsUuid = crypto.randomUUID().substring(0, 35);
+
+      const requestId = context?.idempotency_key || `refund-${Date.now()}`;
+
       const refundData = {
+        requestId: requestId,
         refunds: [
           {
-            refundUuid: crypto.randomUUID(),
-            description: `Refund for order ${sessionId}`,
-            amount: getSmallestUnit(Number(refundAmount), currencyCode),
             orderId: orderId,
+            sessionId: sessionId,
+            amount: getSmallestUnit(Number(refundAmount), currencyCode),
+            description: `Refund for order ${sessionId}`,
           },
         ],
+        refundsUuid: refundsUuid,
+        // urlStatus: this.options_.backend_url
+        //   ? `${
+        //       this.options_.backend_url
+        //     }/hooks/refund/${this.getProviderKey()}_przelewy24`
+        //   : undefined,
       };
 
-      await this.p24Api.processRefund(refundData);
+      const refundResult = await this.p24Api.processRefund(refundData);
+
+      // Check if refund was successful
+      const refundStatus = refundResult.data[0]?.status;
+      const refundMessage = refundResult.data[0]?.message;
+
+      if (refundResult.responseCode !== 0 || !refundStatus) {
+        throw this.buildError(
+          "Refund request failed",
+          new Error(
+            `P24 API error: ${refundResult.responseCode} - ${
+              refundMessage || "Unknown error"
+            }`
+          )
+        );
+      }
 
       return {
         data: {
           ...paymentData,
           refund_amount: refundAmount,
           refunded_at: new Date().toISOString(),
+          refunds_uuid: refundsUuid,
+          refund_request_id: requestId,
+          refund_status: refundStatus,
+          refund_message: refundMessage,
           status: "refund_requested",
         },
       };

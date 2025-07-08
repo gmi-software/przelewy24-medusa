@@ -3,9 +3,9 @@ export interface P24Options {
   pos_id: string;
   api_key: string;
   crc: string;
-  sandbox?: boolean;
-  frontend_url?: string;
-  backend_url?: string;
+  sandbox: boolean;
+  frontend_url: string;
+  backend_url: string;
 }
 
 export interface P24PaymentIntentOptions {
@@ -117,6 +117,36 @@ export interface P24BlikResponse {
 export interface P24BlikChargeByCodeData {
   token: string;
   blikCode: string;
+}
+
+/**
+ * P24 Refund Request Data
+ */
+export interface P24RefundRequestData {
+  requestId: string;
+  refunds: Array<{
+    orderId: number;
+    sessionId: string;
+    amount: number;
+    description?: string;
+  }>;
+  refundsUuid: string;
+  urlStatus?: string;
+}
+
+/**
+ * P24 Refund Response Data
+ */
+export interface P24RefundResponseData {
+  data: Array<{
+    orderId: number;
+    sessionId: string;
+    amount: number;
+    description: string;
+    status: boolean;
+    message: string;
+  }>;
+  responseCode: number;
 }
 
 export interface BlikOptions extends P24Options {

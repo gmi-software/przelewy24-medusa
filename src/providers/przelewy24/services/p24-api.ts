@@ -8,6 +8,8 @@ import {
   P24SignatureData,
   P24SignatureVerificationData,
   P24WebhookPayload,
+  P24RefundRequestData,
+  P24RefundResponseData,
 } from "../types";
 
 export class P24ApiService {
@@ -47,8 +49,6 @@ export class P24ApiService {
         crc: this.options.crc,
       }),
     };
-
-    console.log("requestData sign:", requestData.sign);
 
     return this.makeRequest("/transaction/register", "POST", requestData);
   }
@@ -94,15 +94,10 @@ export class P24ApiService {
   /**
    * Process a refund
    */
-  async processRefund(refundData: {
-    refunds: Array<{
-      refundUuid: string;
-      description: string;
-      amount: number;
-      orderId: number;
-    }>;
-  }): Promise<any> {
-    return this.makeRequest("/refund", "POST", refundData);
+  async processRefund(
+    refundData: P24RefundRequestData
+  ): Promise<P24RefundResponseData> {
+    return this.makeRequest("/transaction/refund", "POST", refundData);
   }
 
   /**
@@ -134,10 +129,6 @@ export class P24ApiService {
     data?: any
   ): Promise<any> {
     const url = `${this.baseURL}${endpoint}`;
-
-    console.log("pos_id", this.options.pos_id);
-    console.log("api_key", this.options.api_key);
-    console.log("url", url);
 
     // P24 uses Basic authentication: pos_id as username, api_key as password
     const credentials = Buffer.from(
