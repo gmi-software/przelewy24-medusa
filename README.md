@@ -1,92 +1,70 @@
-<p align="center">
-  <a href="https://www.medusajs.com">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://user-images.githubusercontent.com/59018053/229103275-b5e482bb-4601-46e6-8142-244f531cebdb.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://user-images.githubusercontent.com/59018053/229103726-e5b529a3-9b3f-4970-8a1f-c6af37f087bf.svg">
-    <img alt="Medusa logo" src="https://user-images.githubusercontent.com/59018053/229103726-e5b529a3-9b3f-4970-8a1f-c6af37f087bf.svg">
-    </picture>
-  </a>
-</p>
-<h1 align="center">
-  Medusa Plugin Starter
-</h1>
+# Przelewy24 Payments for Medusa
 
-<h4 align="center">
-  <a href="https://docs.medusajs.com">Documentation</a> |
-  <a href="https://www.medusajs.com">Website</a>
-</h4>
+A comprehensive payment provider plugin that enables [Przelewy24](https://www.przelewy24.pl/) payments on [Medusa](https://medusajs.com/) V2 projects.
 
 <p align="center">
-  Building blocks for digital commerce
-</p>
-<p align="center">
-  <a href="https://github.com/medusajs/medusa/blob/master/CONTRIBUTING.md">
-    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat" alt="PRs welcome!" />
+  <a href="https://gmi.software/">
+    <img src="https://img.shields.io/badge/Website-gmi.software-blue?style=flat&logo=world" alt="Website" />
   </a>
-    <a href="https://www.producthunt.com/posts/medusa"><img src="https://img.shields.io/badge/Product%20Hunt-%231%20Product%20of%20the%20Day-%23DA552E" alt="Product Hunt"></a>
-  <a href="https://discord.gg/xpCwq3Kfn8">
-    <img src="https://img.shields.io/badge/chat-on%20discord-7289DA.svg" alt="Discord Chat" />
-  </a>
-  <a href="https://twitter.com/intent/follow?screen_name=medusajs">
-    <img src="https://img.shields.io/twitter/follow/medusajs.svg?label=Follow%20@medusajs" alt="Follow @medusajs" />
+
+  <a href="https://pl.linkedin.com/company/gmisoftware">
+    <img src="https://img.shields.io/badge/LinkedIn-gmisoftware-blue?style=flat&logo=linkedin" alt="LinkedIn" />
   </a>
 </p>
 
-## Compatibility
+## Table of Contents
 
-This starter is compatible with versions >= 2.4.0 of `@medusajs/medusa`.
-
-## Getting Started
-
-Visit the [Quickstart Guide](https://docs.medusajs.com/learn/installation) to set up a server.
-
-Visit the [Plugins documentation](https://docs.medusajs.com/learn/fundamentals/plugins) to learn more about plugins and how to create them.
-
-Visit the [Docs](https://docs.medusajs.com/learn/installation#get-started) to learn more about our system requirements.
-
-## What is Medusa
-
-Medusa is a set of commerce modules and tools that allow you to build rich, reliable, and performant commerce applications without reinventing core commerce logic. The modules can be customized and used to build advanced ecommerce stores, marketplaces, or any product that needs foundational commerce primitives. All modules are open-source and freely available on npm.
-
-Learn more about [Medusa's architecture](https://docs.medusajs.com/learn/introduction/architecture) and [commerce modules](https://docs.medusajs.com/learn/fundamentals/modules/commerce-modules) in the Docs.
-
-## Community & Contributions
-
-The community and core team are available in [GitHub Discussions](https://github.com/medusajs/medusa/discussions), where you can ask for support, discuss roadmap, and share ideas.
-
-Join our [Discord server](https://discord.com/invite/medusajs) to meet other community members.
-
-## Other channels
-
-- [GitHub Issues](https://github.com/medusajs/medusa/issues)
-- [Twitter](https://twitter.com/medusajs)
-- [LinkedIn](https://www.linkedin.com/company/medusajs)
-- [Medusa Blog](https://medusajs.com/blog/)
-
-# Przelewy24 (P24) Payment Plugin for Medusa
-
-A comprehensive Przelewy24 payment integration plugin for Medusa e-commerce, supporting BLIK, card payments, and general P24 redirect flow.
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+  - [Configuration Options](#configuration-options)
+  - [Environment Variables](#environment-variables)
+- [Usage](#usage)
+- [Client-Side Integration](#client-side-integration)
+- [Supported Payment Methods](#supported-payment-methods)
+- [Payment Flows](#payment-flows)
+- [Webhook Configuration](#webhook-configuration)
+- [Extending the Plugin](#extending-the-plugin)
+- [Local Development and Customization](#local-development-and-customization)
+- [License](#license)
 
 ## Features
 
-- **Multiple Payment Methods**: BLIK, Cards, and general P24 redirect
-- **BLIK Support**: Regular BLIK codes and one-click BLIK
-- **White Label Integration**: Support for BLIK white label and card white label
-- **Webhook Handling**: Secure webhook verification and processing
-- **Modular Architecture**: Multiple services in a single module provider
-- **TypeScript Support**: Full TypeScript implementation with proper types
+- **Multiple Payment Methods**: Supports a wide range of Przelewy24 payment methods including:
+
+  - BLIK (Regular and One-Click)
+  - Credit/Debit Cards
+  - Bank Transfers
+  - White Label Integration
+
+- **Modular Architecture**: Multiple services in a single module provider for easy management.
+
+- **Webhook Support**: Full support for Przelewy24 webhooks for real-time payment status updates.
+
+- **TypeScript Support**: Full TypeScript implementation with proper types.
+
+- **Sandbox Mode**: Built-in sandbox support for testing.
+
+> [!WARNING] > _This plugin has not been tested on a live store. Please conduct thorough testing before using it in a production environment. GMI Software is not responsible for any missed or failed payments resulting from the use of this plugin. If you encounter any issues, please report them [here](https://github.com/gmi-software/p24-medusa-plugin/issues)._
+
+## Prerequisites
+
+- Medusa server v2.4.0 or later
+- Node.js v20 or later
+- A [Przelewy24](https://www.przelewy24.pl/) merchant account with API credentials.
+
+> [!NOTE] > _You can get your API credentials from your Przelewy24 merchant panel_
 
 ## Installation
 
 ```bash
-npm install p24-medusa-plugin
-# or
 yarn add p24-medusa-plugin
 ```
 
 ## Configuration
 
-Add the P24 plugin to your `medusa-config.ts`:
+Add the provider to the `@medusajs/payment` module in your `medusa-config.ts` file:
 
 ```typescript
 import { Modules } from "@medusajs/framework/utils";
@@ -97,56 +75,43 @@ module.exports = defineConfig({
       resolve: "@medusajs/medusa/payment",
       options: {
         providers: [
-          // P24 Plugin with multiple services
           {
-            resolve: "p24-medusa-plugin",
-            id: "p24-blik",
+            resolve:
+              "@gmisoftware/przelewy24-payments-medusa/providers/przelewy24",
+            id: "przelewy24",
             options: {
+              api_key: process.env.P24_API_KEY,
               merchant_id: process.env.P24_MERCHANT_ID,
               pos_id: process.env.P24_POS_ID,
-              api_key: process.env.P24_API_KEY,
               crc: process.env.P24_CRC,
-              sandbox: process.env.NODE_ENV !== "production",
-              frontend_url: process.env.FRONTEND_URL,
-              backend_url: process.env.BACKEND_URL,
-            },
-          },
-          {
-            resolve: "p24-medusa-plugin",
-            id: "p24-cards",
-            options: {
-              merchant_id: process.env.P24_MERCHANT_ID,
-              pos_id: process.env.P24_POS_ID,
-              api_key: process.env.P24_API_KEY,
-              crc: process.env.P24_CRC,
-              sandbox: process.env.NODE_ENV !== "production",
-              frontend_url: process.env.FRONTEND_URL,
-              backend_url: process.env.BACKEND_URL,
-            },
-          },
-          {
-            resolve: "p24-medusa-plugin",
-            id: "p24-medusa-plugin",
-            options: {
-              merchant_id: process.env.P24_MERCHANT_ID,
-              pos_id: process.env.P24_POS_ID,
-              api_key: process.env.P24_API_KEY,
-              crc: process.env.P24_CRC,
-              sandbox: process.env.NODE_ENV !== "production",
-              frontend_url: process.env.FRONTEND_URL,
-              backend_url: process.env.BACKEND_URL,
+              sandbox: process.env.P24_IS_SANDBOX,
+              frontend_url: process.env.MEDUSA_STORE_URL,
+              backend_url: process.env.MEDUSA_BACKEND_URL,
             },
           },
         ],
       },
     },
   ],
+  plugins: ["@gmisoftware/przelewy24-payments-medusa"],
 });
 ```
 
+## Configuration Options
+
+| Option         | Description                            | Required | Default                 |
+| -------------- | -------------------------------------- | -------- | ----------------------- |
+| `merchant_id`  | P24 Merchant ID                        | Yes      | -                       |
+| `pos_id`       | P24 POS ID                             | Yes      | -                       |
+| `api_key`      | P24 API Key                            | Yes      | -                       |
+| `crc`          | P24 CRC Key for signature verification | Yes      | -                       |
+| `sandbox`      | Enable sandbox mode                    | No       | `false`                 |
+| `frontend_url` | Frontend URL for customer redirects    | No       | `http://localhost:3000` |
+| `backend_url`  | Backend URL for webhook notifications  | No       | `http://localhost:9000` |
+
 ## Environment Variables
 
-Add the following environment variables to your `.env` file:
+Create or update your `.env` file with the following variables:
 
 ```bash
 # P24 Configuration
@@ -160,55 +125,15 @@ FRONTEND_URL=https://your-frontend-domain.com
 BACKEND_URL=https://your-backend-domain.com
 ```
 
-## Provider Options
+## Usage
 
-### Common Options (All Providers)
+Once installed and configured, the Przelewy24 payment methods will be available in your Medusa admin. To enable them, log in to your Medusa Admin, browse to Settings > Regions, add or edit a region and select the desired P24 providers from the dropdown.
 
-| Option         | Description                            | Required | Default                 |
-| -------------- | -------------------------------------- | -------- | ----------------------- |
-| `merchant_id`  | P24 Merchant ID                        | Yes      | -                       |
-| `pos_id`       | P24 POS ID                             | Yes      | -                       |
-| `api_key`      | P24 API Key                            | Yes      | -                       |
-| `crc`          | P24 CRC Key for signature verification | Yes      | -                       |
-| `sandbox`      | Enable sandbox mode                    | No       | `false`                 |
-| `frontend_url` | Frontend URL for customer redirects    | No       | `http://localhost:3000` |
-| `backend_url`  | Backend URL for webhook notifications  | No       | `http://localhost:9000` |
+Make sure that the selected payment methods are enabled in your Przelewy24 merchant panel as well.
 
-## Webhook Configuration
+### Client-Side Integration
 
-### Webhook URLs
-
-The plugin provides webhook endpoints for each provider:
-
-- **BLIK**: `{backend_url}/hooks/payment/p24-blik_p24-medusa-plugin`
-- **Cards**: `{backend_url}/hooks/payment/p24-cards_p24-medusa-plugin`
-- **General**: `{backend_url}/hooks/payment/p24-provider_p24-medusa-plugin`
-
-### Return URL
-
-- **Return URL**: `{frontend_url}`
-
-Configure these URLs in your P24 merchant panel.
-
-**Note**: The webhook URLs follow Medusa's pattern: `{identifier}_{provider}` where:
-
-- `identifier` is the service's static identifier (e.g., `p24-blik`, `p24-cards`, `p24-provider`)
-- `provider` is the package name (`p24-medusa-plugin`)
-
-## Usage Examples
-
-### Frontend Integration
-
-### Data Parameters
-
-The plugin accepts the following parameters in the `data` object:
-
-| Parameter  | Type   | Required | Default | Description                            |
-| ---------- | ------ | -------- | ------- | -------------------------------------- |
-| `country`  | string | No       | `"PL"`  | Country code (e.g., "PL", "DE", "EN")  |
-| `language` | string | No       | `"pl"`  | Language code (e.g., "pl", "en", "de") |
-
-**Note**: Both parameters are optional and will fall back to Polish defaults if not provided.
+To integrate with your storefront, you'll need to implement the payment flow according to Przelewy24's and Medusa's documentation. Here's a basic example:
 
 #### BLIK Payment
 
@@ -296,7 +221,17 @@ const paymentSession = await medusa.payment.createPaymentSession({
 window.location.href = paymentSession.data.redirect_url;
 ```
 
-## Payment Flow
+### Supported Payment Methods
+
+The plugin currently supports the following Przelewy24 payment methods:
+
+| Payment Method | Provider ID                   |
+| -------------- | ----------------------------- |
+| BLIK           | `pp_p24-blik_p24-blik`        |
+| Cards          | `pp_p24-cards_p24-cards`      |
+| General P24    | `pp_p24-provider_p24-general` |
+
+## Payment Flows
 
 ### 1. BLIK Payment Flow
 
@@ -326,77 +261,55 @@ window.location.href = paymentSession.data.redirect_url;
 4. Customer is redirected back to store
 5. Webhook notification confirms payment
 
-## API Reference
+## Webhook Configuration
 
-### Service Identifiers
+### Webhook URLs
 
-The plugin exports multiple services with these identifiers:
+The plugin provides webhook endpoints for each provider:
 
-- `p24-blik` - BLIK payments service
-- `p24-cards` - Card payments service
-- `p24-provider` - General P24 payments service
+- **BLIK**: `{backend_url}/hooks/payment/p24-blik_p24-medusa-plugin`
+- **Cards**: `{backend_url}/hooks/payment/p24-cards_p24-medusa-plugin`
+- **General**: `{backend_url}/hooks/payment/p24-provider_p24-medusa-plugin`
 
-### Provider IDs in Configuration
+### Return URL
 
-When configuring in `medusa-config.ts`, use these IDs:
+- **Return URL**: `{frontend_url}`
 
-- `p24-blik` - For BLIK payments
-- `p24-cards` - For card payments
-- `p24-general` - For general P24 payments
+Configure these URLs in your P24 merchant panel.
 
-### Final Provider IDs
+**Note**: The webhook URLs follow Medusa's pattern: `{identifier}_{provider}` where:
 
-Medusa creates the final provider IDs as: `pp_{service_identifier}_{config_id}`
+- `identifier` is the service's static identifier (e.g., `p24-blik`, `p24-cards`, `p24-provider`)
+- `provider` is the package name (`p24-medusa-plugin`)
 
-- BLIK: `pp_p24-blik_p24-blik`
-- Cards: `pp_p24-cards_p24-cards`
-- General: `pp_p24-provider_p24-general`
+## Extending the Plugin
 
-### Payment Methods
+To add support for additional Przelewy24 payment methods, create a new service in `src/providers/przelewy24/services` that extends the `P24Base` class:
 
-- **BLIK**: Channel 64, Method 181
-- **Cards**: Channel 1
-- **General**: Channel 0 (all methods)
+```typescript
+import P24Base from "../core/p24-base";
+import { PaymentOptions } from "../types";
 
-## Security
+class P24NewMethodService extends P24Base {
+  static identifier = "p24-new-method";
 
-- All webhook payloads are verified using SHA384 signatures
-- Signature format: `{"sessionId":"str","merchantId":int,"amount":int,"currency":"str","crc":"str"}`
-- CRC key is used for signature generation and verification
-- P24 API uses Basic authentication (pos_id:api_key)
-- Sandbox mode available for testing
+  get paymentCreateOptions(): PaymentOptions {
+    return {
+      method: "new_method",
+    };
+  }
+}
 
-## Error Handling
-
-The plugin includes comprehensive error handling:
-
-- API connection errors with retry logic
-- Invalid payment data validation
-- Webhook signature verification
-- Transaction verification
-
-## Development
-
-### Building
-
-```bash
-npm run build
+export default P24NewMethodService;
 ```
 
-### Testing
+Make sure to replace `new_method` with the actual Przelewy24 payment method ID.
 
-```bash
-npm run test
-```
+Export your new service from `src/providers/przelewy24/services/index.ts`. Then add your new service to the list of services in `src/providers/przelewy24/index.ts`.
 
-## Support
+## Local development and customization
 
-For issues and questions:
-
-1. Check P24 API documentation
-2. Verify webhook configuration
-3. Check environment variables
-4. Review Medusa logs
+In case you want to customize and test the plugin locally, refer to the [Medusa Plugin docs](https://docs.medusajs.com/learn/fundamentals/plugins/create#3-publish-plugin-locally-for-development-and-testing).
 
 ## License
 
