@@ -16,10 +16,7 @@ import {
   P24WebhookPayload,
   P24TransactionBySessionIdResponse,
 } from "../types";
-import {
-  getAmountFromSmallestUnit,
-  getSmallestUnit,
-} from "../../../utils/get-smallest-unit";
+
 import { P24ApiService } from "../services/p24-api";
 
 import {
@@ -143,7 +140,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const transactionRequest: P24Transaction = {
         sessionId: context?.idempotency_key as string,
-        amount: getSmallestUnit(Number(amount), currency_code),
+        amount: Number(amount),
         country: country,
         language: language,
         currency: currency_code.toUpperCase(),
@@ -418,7 +415,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           {
             orderId: orderId,
             sessionId: sessionId,
-            amount: getSmallestUnit(Number(refundAmount), currencyCode),
+            amount: Number(refundAmount),
             description: `Refund for order ${sessionId}`,
           },
         ],
@@ -469,18 +466,10 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   ): Promise<RetrievePaymentOutput> {
     try {
       const { data: paymentSessionData } = input;
-      const sessionId = paymentSessionData?.session_id as string;
 
       // Note: This would need the full transaction data to verify
-      // For now, we'll return the existing data
-      const amount = paymentSessionData?.amount as number;
-      const currency = paymentSessionData?.currency as string;
-
       return {
-        data: {
-          ...paymentSessionData,
-          amount: amount ? getAmountFromSmallestUnit(amount, currency) : amount,
-        },
+        data: paymentSessionData,
       };
     } catch (e) {
       throw this.buildError("An error occurred in retrievePayment", e);
@@ -488,8 +477,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   }
 
   async updatePayment(input: UpdatePaymentInput): Promise<UpdatePaymentOutput> {
-    const { data, currency_code, amount } = input;
-    const amountNumeric = getSmallestUnit(Number(amount), currency_code);
+    const { data, amount } = input;
+    const amountNumeric = Number(amount);
 
     if (data?.amount === amountNumeric) {
       return { data };
@@ -548,7 +537,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           action: PaymentActions.FAILED,
           data: {
             session_id: sessionId,
-            amount: getAmountFromSmallestUnit(amount, currency),
+            amount: amount,
           },
         };
       }
@@ -561,7 +550,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const webhookData = {
         session_id: sessionId,
-        amount: getAmountFromSmallestUnit(amount, currency),
+        amount: amount,
       };
 
       switch (medusaStatus) {
@@ -610,7 +599,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
             action: PaymentActions.FAILED,
             data: {
               session_id: sessionId,
-              amount: getAmountFromSmallestUnit(amount, currency),
+              amount: amount,
             },
           };
         }
