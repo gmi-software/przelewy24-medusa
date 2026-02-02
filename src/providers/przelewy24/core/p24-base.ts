@@ -126,8 +126,6 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const normalizedParams = this.normalizePaymentCreateParams();
 
-      console.log("normalizedParams: ", normalizedParams);
-
       const customerEmail =
         context?.customer?.email ||
         ((data?.customer as Record<string, unknown>)?.email as string) ||
@@ -137,6 +135,12 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       const language = (data?.language as string)?.toLowerCase() || "pl";
 
       console.log(`Using country: ${country}, language: ${language}`);
+
+      // Prefer data.return_url (non-empty string); otherwise fallback to default
+      const urlReturn =
+        typeof data?.return_url === "string" && data.return_url.trim().length
+          ? data.return_url
+          : `${this.options_.frontend_url}/payment/return?cart_id=${data?.cart_id ?? ""}`;
 
       const transactionRequest: P24Transaction = {
         sessionId: context?.idempotency_key as string,
@@ -148,7 +152,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           normalizedParams.description || `Payment ${context?.idempotency_key}`,
         email: customerEmail,
         channel: normalizedParams.channel,
-        urlReturn: `${this.options_.frontend_url}/payment/return?cart_id=${data?.cart_id}`,
+        urlReturn,
         urlStatus: `${
           this.options_.backend_url
         }/hooks/payment/${this.getProviderKey()}_przelewy24`,
@@ -164,7 +168,6 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       console.log(`P24 transaction response:`, sessionData);
 
-      // Validate the response - check if P24 returned an error code
       if (sessionData.responseCode !== 0) {
         throw this.buildError(
           "Failed to register P24 transaction",
