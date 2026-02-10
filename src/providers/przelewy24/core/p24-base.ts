@@ -60,7 +60,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
     if (!isDefined(options.frontend_url)) {
       throw new Error(
-        "Required option `frontend_url` is missing in P24 plugin"
+        "Required option `frontend_url` is missing in P24 plugin",
       );
     }
     if (!isDefined(options.backend_url)) {
@@ -119,7 +119,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   }: InitiatePaymentInput): Promise<InitiatePaymentOutput> {
     try {
       console.log(
-        `Initiating P24 payment - Amount: ${amount} ${currency_code}`
+        `Initiating P24 payment - Amount: ${amount} ${currency_code}`,
       );
       console.log(`Context:`, context);
       console.log("data: ", data);
@@ -159,12 +159,11 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       };
 
       console.log(
-        `Registering P24 transaction with session ID: ${transactionRequest.sessionId}`
+        `Registering P24 transaction with session ID: ${transactionRequest.sessionId}`,
       );
 
-      const sessionData = await this.p24Api.registerTransaction(
-        transactionRequest
-      );
+      const sessionData =
+        await this.p24Api.registerTransaction(transactionRequest);
 
       console.log(`P24 transaction response:`, sessionData);
 
@@ -174,13 +173,13 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           new Error(
             `P24 API error: ${sessionData.responseCode} - ${
               sessionData.message || "Unknown error"
-            }`
-          )
+            }`,
+          ),
         );
       }
 
       console.log(
-        `P24 payment ${transactionRequest.sessionId} successfully initiated`
+        `P24 payment ${transactionRequest.sessionId} successfully initiated`,
       );
 
       return {
@@ -229,7 +228,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
    * @returns The payment data with authorization status
    */
   async authorizePayment(
-    input: AuthorizePaymentInput
+    input: AuthorizePaymentInput,
   ): Promise<AuthorizePaymentOutput> {
     console.log("----- REACHED TO THE AUTHORIZE PAYMENT -----");
     console.log("input from authorize: ", input);
@@ -239,7 +238,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     if (!sessionId) {
       throw this.buildError(
         "Session ID is required for payment authorization",
-        new Error("No session ID provided")
+        new Error("No session ID provided"),
       );
     }
 
@@ -249,13 +248,13 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       console.log(
         "transactionDetails (in authorize payment): ",
-        transactionDetails
+        transactionDetails,
       );
 
       if (!["authorized", "captured", "pending"].includes(medusaStatus)) {
         throw this.buildError(
           `Payment is not in a valid state for authorization: current status is ${medusaStatus}`,
-          new Error(`Invalid payment status: ${medusaStatus}`)
+          new Error(`Invalid payment status: ${medusaStatus}`),
         );
       }
 
@@ -288,7 +287,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
    * @returns The payment data with capture confirmation
    */
   async capturePayment(
-    input: CapturePaymentInput
+    input: CapturePaymentInput,
   ): Promise<CapturePaymentOutput> {
     console.log("----- REACHED TO THE CAPTURE PAYMENT -----");
     console.log("input from capture: ", input);
@@ -301,7 +300,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     if (!sessionId || !amount || !currency || !orderId) {
       throw this.buildError(
         "Missing required data for payment capture",
-        new Error("Session ID, amount, currency, and order ID are required")
+        new Error("Session ID, amount, currency, and order ID are required"),
       );
     }
 
@@ -313,7 +312,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         sessionId,
         amount,
         currency,
-        orderId
+        orderId,
       );
 
       if (
@@ -323,8 +322,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         throw this.buildError(
           "Payment capture failed",
           new Error(
-            `Verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`
-          )
+            `Verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`,
+          ),
         );
       }
 
@@ -396,19 +395,17 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   async refundPayment(input: RefundPaymentInput): Promise<RefundPaymentOutput> {
     const { data: paymentData, amount: refundAmount, context } = input;
     const sessionId = paymentData?.session_id as string;
-    const orderId = paymentData?.order_id as number;
+    const orderId = paymentData?.orderId as number;
 
     if (!sessionId || !orderId) {
       throw this.buildError(
         "No session ID or order ID provided while refunding payment",
-        new Error("Missing session ID or order ID")
+        new Error("Missing session ID or order ID"),
       );
     }
 
     try {
-      const currencyCode = (paymentData?.currency as string) || "PLN";
-
-      const refundsUuid = crypto.randomUUID().substring(0, 35);
+      const refundsUuid = crypto.randomUUID();
 
       const requestId = context?.idempotency_key || `refund-${Date.now()}`;
 
@@ -423,11 +420,6 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           },
         ],
         refundsUuid: refundsUuid,
-        // urlStatus: this.options_.backend_url
-        //   ? `${
-        //       this.options_.backend_url
-        //     }/hooks/refund/${this.getProviderKey()}_przelewy24`
-        //   : undefined,
       };
 
       const refundResult = await this.p24Api.processRefund(refundData);
@@ -442,8 +434,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           new Error(
             `P24 API error: ${refundResult.responseCode} - ${
               refundMessage || "Unknown error"
-            }`
-          )
+            }`,
+          ),
         );
       }
 
@@ -456,6 +448,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           refund_request_id: requestId,
           refund_status: refundStatus,
           refund_message: refundMessage,
+          p24_refunds: refundResult.data,
+          p24_response_code: refundResult.responseCode,
           status: "refund_requested",
         },
       };
@@ -465,7 +459,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   }
 
   async retrievePayment(
-    input: RetrievePaymentInput
+    input: RetrievePaymentInput,
   ): Promise<RetrievePaymentOutput> {
     try {
       const { data: paymentSessionData } = input;
@@ -491,7 +485,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     // We need to create a new payment session
     throw this.buildError(
       "P24 doesn't support updating payment amounts. Please create a new payment session.",
-      new Error("Update not supported")
+      new Error("Update not supported"),
     );
   }
 
@@ -502,7 +496,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
    * @returns The action and data to be processed
    */
   async getWebhookActionAndData(
-    webhookData: ProviderWebhookPayload["payload"]
+    webhookData: ProviderWebhookPayload["payload"],
   ): Promise<WebhookActionResult> {
     const { data } = webhookData;
 
@@ -526,7 +520,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         sessionId,
         amount,
         currency,
-        orderId
+        orderId,
       );
 
       if (
@@ -534,7 +528,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         verification.data.status !== "success"
       ) {
         console.error(
-          `Transaction verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`
+          `Transaction verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`,
         );
         return {
           action: PaymentActions.FAILED,
@@ -547,9 +541,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       console.log("Transaction verified successfully");
 
-      const { medusaStatus } = await this.getTransactionDetailsAndStatus(
-        sessionId
-      );
+      const { medusaStatus } =
+        await this.getTransactionDetailsAndStatus(sessionId);
 
       const webhookData = {
         session_id: sessionId,
@@ -622,13 +615,13 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
    * @returns The current payment status from P24
    */
   async getPaymentStatus(
-    input: GetPaymentStatusInput
+    input: GetPaymentStatusInput,
   ): Promise<GetPaymentStatusOutput> {
     const sessionId = input.context?.idempotency_key;
 
     if (!sessionId) {
       console.warn(
-        "No session ID provided for getPaymentStatus, returning pending"
+        "No session ID provided for getPaymentStatus, returning pending",
       );
       return { status: "pending" as PaymentSessionStatus };
     }
@@ -636,13 +629,12 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     console.log(`Fetching payment status for session: ${sessionId}`);
 
     try {
-      const { medusaStatus } = await this.getTransactionDetailsAndStatus(
-        sessionId
-      );
+      const { medusaStatus } =
+        await this.getTransactionDetailsAndStatus(sessionId);
       return { status: medusaStatus };
     } catch (error) {
       console.error(
-        `Error getting payment status for session ${sessionId}: ${error.message}`
+        `Error getting payment status for session ${sessionId}: ${error.message}`,
       );
       throw error;
     }
@@ -660,14 +652,13 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     p24Status: number;
     medusaStatus: PaymentSessionStatus;
   }> {
-    const transactionDetails = await this.p24Api.getTransactionBySessionId(
-      sessionId
-    );
+    const transactionDetails =
+      await this.p24Api.getTransactionBySessionId(sessionId);
 
     if (transactionDetails.responseCode !== 0) {
       throw this.buildError(
         "Failed to retrieve transaction details",
-        new Error(`P24 API error: ${transactionDetails.responseCode}`)
+        new Error(`P24 API error: ${transactionDetails.responseCode}`),
       );
     }
 
@@ -691,7 +682,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
    * Medusa statuses: "authorized" | "captured" | "pending" | "requires_more" | "error" | "canceled"
    */
   protected mapP24StatusToMedusaStatus(
-    p24Status: number
+    p24Status: number,
   ): PaymentSessionStatus {
     switch (p24Status) {
       case 0: // no payment
