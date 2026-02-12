@@ -312,7 +312,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       // Call transaction/verify to confirm and capture the payment
       const verification = await this.p24Api.verifyTransaction(
         sessionId,
-        amount,
+        getSmallestUnit(amount, currency),
         currency,
         orderId
       );
