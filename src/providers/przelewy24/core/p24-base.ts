@@ -410,6 +410,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const requestId = context?.idempotency_key || `refund-${Date.now()}`;
 
+      const currencyCode = (paymentData?.currency_code as string) || "pln";
+
       const refundData = {
         requestId: requestId,
         refunds: [
