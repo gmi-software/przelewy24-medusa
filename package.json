@@ -1,6 +1,6 @@
 {
   "name": "@gmisoftware/przelewy24-payments-medusa",
-  "version": "0.0.6",
+  "version": "0.0.5",
   "description": "Przelewy24 (P24) payment integration plugin for Medusa e-commerce with BLIK, cards, and general P24 support.",
   "author": "GMI",
   "license": "MIT",
@@ -40,16 +40,17 @@
     "build": "medusa plugin:build",
     "dev": "medusa plugin:develop",
     "prepublishOnly": "medusa plugin:build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "release": "release-it"
   },
   "devDependencies": {
     "@medusajs/admin-sdk": "2.13.2",
     "@medusajs/cli": "2.13.2",
     "@medusajs/framework": "2.13.2",
+    "@medusajs/icons": "2.13.2",
     "@medusajs/medusa": "2.13.2",
     "@medusajs/test-utils": "2.13.2",
     "@medusajs/ui": "4.0.25",
-    "@medusajs/icons": "2.13.2",
     "@swc/core": "^1.7.28",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.2",
@@ -57,6 +58,7 @@
     "prop-types": "^15.8.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "release-it": "^19.2.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.2",
     "vite": "^5.2.11",
@@ -67,10 +69,10 @@
     "@medusajs/admin-sdk": "2.13.2",
     "@medusajs/cli": "2.13.2",
     "@medusajs/framework": "2.13.2",
-    "@medusajs/test-utils": "2.13.2",
+    "@medusajs/icons": "2.13.2",
     "@medusajs/medusa": "2.13.2",
-    "@medusajs/ui": "4.0.25",
-    "@medusajs/icons": "2.13.2"
+    "@medusajs/test-utils": "2.13.2",
+    "@medusajs/ui": "4.0.25"
   },
   "engines": {
     "node": ">=20"
