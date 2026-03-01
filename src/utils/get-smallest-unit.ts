@@ -1,34 +1,79 @@
-/**
- * Convert amount to smallest currency unit (grosze for PLN)
- * P24 expects amounts in grosze (1 PLN = 100 grosze)
- */
-export function getSmallestUnit(amount: number, currencyCode: string): number {
-  // P24 primarily supports PLN, but we can handle other currencies too
-  const currencyMultipliers: Record<string, number> = {
-    PLN: 100, // grosze
-    EUR: 100, // cents
-    USD: 100, // cents
-    GBP: 100, // pence
+import { BigNumberInput } from "@medusajs/framework/types";
+import { BigNumber, MathBN } from "@medusajs/framework/utils";
+
+function getCurrencyMultiplier(currency) {
+  const currencyMultipliers = {
+    0: [
+      "BIF",
+      "CLP",
+      "DJF",
+      "GNF",
+      "JPY",
+      "KMF",
+      "KRW",
+      "MGA",
+      "PYG",
+      "RWF",
+      "UGX",
+      "VND",
+      "VUV",
+      "XAF",
+      "XOF",
+      "XPF",
+    ],
+    3: ["BHD", "IQD", "JOD", "KWD", "OMR", "TND"],
   };
 
-  const multiplier = currencyMultipliers[currencyCode.toUpperCase()] || 100;
-  return Math.round(amount * multiplier);
+  currency = currency.toUpperCase();
+  let power = 2;
+  for (const [key, value] of Object.entries(currencyMultipliers)) {
+    if (value.includes(currency)) {
+      power = parseInt(key, 10);
+      break;
+    }
+  }
+  return Math.pow(10, power);
 }
 
 /**
- * Convert amount from smallest currency unit back to major unit
+ * Converts an amount to the format required by Stripe based on currency.
+ * https://docs.stripe.com/currencies
+ * @param {BigNumberInput} amount - The amount to be converted.
+ * @param {string} currency - The currency code (e.g., 'USD', 'JOD').
+ * @returns {number} - The converted amount in the smallest currency unit.
+ */
+export function getSmallestUnit(
+  amount: BigNumberInput,
+  currency: string,
+): number {
+  const multiplier = getCurrencyMultiplier(currency);
+
+  let amount_ =
+    Math.round(new BigNumber(MathBN.mult(amount, multiplier)).numeric) /
+    multiplier;
+
+  const smallestAmount = new BigNumber(MathBN.mult(amount_, multiplier));
+
+  let numeric = smallestAmount.numeric;
+  // Check if the currency requires rounding to the nearest ten
+  if (multiplier === 1e3) {
+    numeric = Math.ceil(numeric / 10) * 10;
+  }
+
+  return parseInt(numeric.toString().split(".").shift()!, 10);
+}
+
+/**
+ * Converts an amount from the smallest currency unit to the standard unit based on currency.
+ * @param {BigNumberInput} amount - The amount in the smallest currency unit.
+ * @param {string} currency - The currency code (e.g., 'USD', 'JOD').
+ * @returns {number} - The converted amount in the standard currency unit.
  */
 export function getAmountFromSmallestUnit(
-  amount: number,
-  currencyCode: string
+  amount: BigNumberInput,
+  currency: string,
 ): number {
-  const currencyMultipliers: Record<string, number> = {
-    PLN: 100,
-    EUR: 100,
-    USD: 100,
-    GBP: 100,
-  };
-
-  const multiplier = currencyMultipliers[currencyCode.toUpperCase()] || 100;
-  return amount / multiplier;
+  const multiplier = getCurrencyMultiplier(currency);
+  const standardAmount = new BigNumber(MathBN.div(amount, multiplier));
+  return standardAmount.numeric;
 }
