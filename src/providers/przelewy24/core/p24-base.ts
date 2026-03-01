@@ -18,6 +18,7 @@ import {
 } from "../types";
 
 import { P24ApiService } from "../services/p24-api";
+import { getSmallestUnit } from "../../../utils/get-smallest-unit";
 
 import {
   InitiatePaymentInput,
@@ -144,7 +145,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const transactionRequest: P24Transaction = {
         sessionId: context?.idempotency_key as string,
-        amount: Number(amount),
+        amount: getSmallestUnit(Number(amount), currency_code),
         country: country,
         language: language,
         currency: currency_code.toUpperCase(),
@@ -310,7 +311,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       // Call transaction/verify to confirm and capture the payment
       const verification = await this.p24Api.verifyTransaction(
         sessionId,
-        amount,
+        getSmallestUnit(amount, currency),
         currency,
         orderId,
       );
@@ -415,7 +416,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           {
             orderId: orderId,
             sessionId: sessionId,
-            amount: Number(refundAmount),
+            amount: getSmallestUnit(Number(refundAmount), currencyCode),
             description: `Refund for order ${sessionId}`,
           },
         ],
