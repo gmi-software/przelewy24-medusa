@@ -270,9 +270,14 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       } as Record<string, unknown>;
 
       const currencyCode =
-        (data.currency as string) ||
-        (input.data?.currency_code as string) ||
-        "PLN";
+        (data.currency as string) || (input.data?.currency_code as string);
+
+      if (!currencyCode) {
+        throw this.buildError(
+          `Missing currency code for amount conversion in authorizePayment (session: ${sessionId})`,
+          new Error("currency_code is required to convert P24 amount"),
+        );
+      }
 
       if (data.amount != null) {
         data.amount = getAmountFromSmallestUnit(
