@@ -1,6 +1,6 @@
 {
   "name": "@gmisoftware/przelewy24-payments-medusa",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Przelewy24 (P24) payment integration plugin for Medusa e-commerce with BLIK, cards, and general P24 support.",
   "author": "GMI",
   "license": "MIT",
