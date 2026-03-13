@@ -576,6 +576,18 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         return { action: PaymentActions.NOT_SUPPORTED };
       }
 
+      const amountNum = Number(amount);
+      if (
+        amount == null ||
+        !Number.isFinite(amountNum) ||
+        amountNum < 0
+      ) {
+        console.error(
+          `Missing or invalid amount in webhook payload for session ${sessionId}`,
+        );
+        return { action: PaymentActions.NOT_SUPPORTED };
+      }
+
       // P24 webhook amount is in smallest unit; convert to normal for Medusa
       const amountNormal = getAmountFromSmallestUnit(amount, currency);
       console.log("Verifying transaction with P24...");
@@ -653,9 +665,12 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           webhookData.data as unknown as P24WebhookPayload;
         const { sessionId, amount, currency } = fallbackPayload;
 
+        const amountNumFallback = Number(amount);
         if (
           sessionId &&
           amount != null &&
+          Number.isFinite(amountNumFallback) &&
+          amountNumFallback >= 0 &&
           typeof currency === "string" &&
           currency.trim()
         ) {
