@@ -18,7 +18,10 @@ import {
 } from "../types";
 
 import { P24ApiService } from "../services/p24-api";
-import { getSmallestUnit } from "../../../utils/get-smallest-unit";
+import {
+  getSmallestUnit,
+  getAmountFromSmallestUnit,
+} from "../../../utils/get-smallest-unit";
 
 import {
   InitiatePaymentInput,
@@ -259,12 +262,39 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         );
       }
 
+      // P24 API returns amounts in smallest unit; convert to normal for Medusa
+      const data = {
+        ...input.data,
+        ...transactionDetails.data,
+        p24_status: p24Status,
+      } as Record<string, unknown>;
+
+      const currencyCode =
+        (data.currency as string) || (input.data?.currency_code as string);
+
+      if (!currencyCode) {
+        throw this.buildError(
+          `Missing currency code for amount conversion in authorizePayment (session: ${sessionId})`,
+          new Error("currency_code is required to convert P24 amount"),
+        );
+      }
+
+      if (data.amount != null) {
+        data.amount = getAmountFromSmallestUnit(
+          data.amount as number,
+          currencyCode,
+        );
+      }
+
+      if (data.originAmount != null) {
+        data.originAmount = getAmountFromSmallestUnit(
+          data.originAmount as number,
+          currencyCode,
+        );
+      }
+
       return {
-        data: {
-          ...input.data,
-          ...transactionDetails.data,
-          p24_status: p24Status,
-        },
+        data,
         status: medusaStatus,
       };
     } catch (error) {
@@ -442,6 +472,27 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         );
       }
 
+      // P24 refund response amounts are in smallest unit; convert for Medusa
+      const p24RefundsNormal = Array.isArray(refundResult.data)
+        ? refundResult.data.map((item: Record<string, unknown>) => {
+            const out = { ...item };
+            const curr = (item.currency as string) || currencyCode;
+            if (out.amount != null) {
+              out.amount = getAmountFromSmallestUnit(
+                out.amount as number,
+                curr,
+              );
+            }
+            if (out.originAmount != null) {
+              out.originAmount = getAmountFromSmallestUnit(
+                out.originAmount as number,
+                curr,
+              );
+            }
+            return out;
+          })
+        : refundResult.data;
+
       return {
         data: {
           ...paymentData,
@@ -451,7 +502,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           refund_request_id: requestId,
           refund_status: refundStatus,
           refund_message: refundMessage,
-          p24_refunds: refundResult.data,
+          p24_refunds: p24RefundsNormal,
           p24_response_code: refundResult.responseCode,
           status: "refund_requested",
         },
@@ -518,6 +569,27 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         return { action: PaymentActions.NOT_SUPPORTED };
       }
 
+      if (typeof currency !== "string" || !currency.trim()) {
+        console.error(
+          `Missing or invalid currency in webhook payload for session ${sessionId}`,
+        );
+        return { action: PaymentActions.NOT_SUPPORTED };
+      }
+
+      const amountNum = Number(amount);
+      if (
+        amount == null ||
+        !Number.isFinite(amountNum) ||
+        amountNum < 0
+      ) {
+        console.error(
+          `Missing or invalid amount in webhook payload for session ${sessionId}`,
+        );
+        return { action: PaymentActions.NOT_SUPPORTED };
+      }
+
+      // P24 webhook amount is in smallest unit; convert to normal for Medusa
+      const amountNormal = getAmountFromSmallestUnit(amount, currency);
       console.log("Verifying transaction with P24...");
       const verification = await this.p24Api.verifyTransaction(
         sessionId,
@@ -537,7 +609,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           action: PaymentActions.FAILED,
           data: {
             session_id: sessionId,
-            amount: amount,
+            amount: amountNormal,
           },
         };
       }
@@ -549,7 +621,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
       const webhookData = {
         session_id: sessionId,
-        amount: amount,
+        amount: amountNormal,
       };
 
       switch (medusaStatus) {
@@ -593,12 +665,21 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           webhookData.data as unknown as P24WebhookPayload;
         const { sessionId, amount, currency } = fallbackPayload;
 
-        if (sessionId && amount && currency) {
+        const amountNumFallback = Number(amount);
+        if (
+          sessionId &&
+          amount != null &&
+          Number.isFinite(amountNumFallback) &&
+          amountNumFallback >= 0 &&
+          typeof currency === "string" &&
+          currency.trim()
+        ) {
+          const amountNormal = getAmountFromSmallestUnit(amount, currency);
           return {
             action: PaymentActions.FAILED,
             data: {
               session_id: sessionId,
-              amount: amount,
+              amount: amountNormal,
             },
           };
         }
