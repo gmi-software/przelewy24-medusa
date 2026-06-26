@@ -94,8 +94,8 @@ module.exports = defineConfig({
 | `sandbox`               | Enable sandbox mode (`true`/`false` or `"true"`/`"false"`) | No       | `false`                 |
 | `card_channel`          | P24 channel for card-only registration                   | No       | `4096`                  |
 | `visa_mobile_method_id` | P24 method id for Visa Mobile                            | No       | `198`                   |
-| `frontend_url`          | Frontend URL for customer redirects                      | No       | `http://localhost:3000` |
-| `backend_url`           | Backend URL for webhook notifications                    | No       | `http://localhost:9000` |
+| `frontend_url`          | Frontend URL for customer redirects                      | Yes      | -                       |
+| `backend_url`           | Backend URL for webhook notifications                    | Yes      | -                       |
 
 ### Environment Variables
 
