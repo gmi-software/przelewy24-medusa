@@ -25,7 +25,7 @@ A comprehensive [Przelewy24](https://www.przelewy24.pl/) payment provider plugin
 - ✅ **Sandbox Mode** — Built-in sandbox support for testing
 
 > [!WARNING]
-> This plugin has not been tested on a live store. Please conduct thorough testing before using it in a production environment. GMI Software is not responsible for any missed or failed payments resulting from the use of this plugin. If you encounter any issues, please report them [here](https://github.com/gmi-software/przelewy24-medusa/issues).
+> This plugin has not been tested on a live store. Please conduct thorough testing before using it in a production environment. GMI Software is not responsible for any missed or failed payments resulting from the use of this plugin. If you encounter any issues, please report them on the [GitHub issues tracker](https://github.com/gmi-software/przelewy24-medusa/issues).
 
 ---
 
