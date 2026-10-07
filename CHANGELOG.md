@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+### Changed
+- Non-2xx Przelewy24 API responses now throw a typed `P24ApiError` (`status`, `method`, `endpoint`, `p24Code`, `p24Description`, `responseBody`, `localizedMessage`). The message keeps the `P24 API request failed: <status> <statusText>` prefix and appends P24 error details, e.g. `P24 API request failed: 400 Bad Request - 400: Incorrect blikCode`. Response bodies are parsed as JSON or truncated to 1000 characters, with API key, CRC, Authorization, `token` and `sign` values masked
+- Failed BLIK charges log `[p24-charge] <message> context={...}` with payment session id, P24 session id, cart id, amount, endpoint, HTTP status and P24 code/description, and store `error_http_status`, `error_p24_code`, `error_p24_description`, `error_endpoint`, `error_session_id`, `error_amount_grosze` next to `error_message` on the payment session
+- Card charge failures are now logged with the same context (`[p24-card-charge]`)
+- `P24ApiError.message` (and therefore `error_message` on the session) is always the technical message, even for known P24 codes; the localized customer text is available as `P24ApiError.localizedMessage` and is still what `POST /store/payments/blik/charge` and `POST /store/payments/card/charge` return in `message`. As a side effect, `isExpectedStalePaymentJobFailure` now also matches 400 responses that carry a known P24 code
+
 ## 0.1.3
 
 ### Added

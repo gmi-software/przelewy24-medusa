@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  ContainerRegistrationKeys,
+  Modules,
+} from "@medusajs/framework/utils";
 
+import { P24ApiError } from "../../../../../utils/p24-api-error";
 import {
   assertBlikChargeMatchesPaymentSession,
+  handleP24Charge,
   resolveP24Provider,
   resolveP24ProviderKeyForStatus,
   resolvePaymentProviderById,
@@ -161,6 +167,121 @@ describe("resolveP24Provider", () => {
       "pp_p24-visa-mobile_przelewy24",
     );
     expect(provider).toBe(visaProvider);
+  });
+});
+
+describe("handleP24Charge failure handling", () => {
+  const SECRET_TOKEN = "TOKEN-SECRET-1234";
+
+  function buildReq() {
+    const logger = { error: vi.fn() };
+    const updatePaymentSession = vi.fn().mockResolvedValue({});
+    const paymentModule = {
+      retrievePaymentSession: vi.fn().mockResolvedValue({
+        id: "payses_1",
+        amount: 12.34,
+        currency_code: "pln",
+        data: {
+          session_id: "payses_1-retry",
+          amount_grosze: 1234,
+          token: SECRET_TOKEN,
+          error_p24_code: "stale",
+        },
+      }),
+      updatePaymentSession,
+    };
+    const query = {
+      graph: vi.fn().mockResolvedValue({
+        data: [{ payment_collection: { cart: { id: "cart_1" } } }],
+      }),
+    };
+
+    const req = {
+      scope: {
+        resolve: vi.fn((key: string) => {
+          if (key === ContainerRegistrationKeys.LOGGER) return logger;
+          if (key === ContainerRegistrationKeys.QUERY) return query;
+          if (key === Modules.PAYMENT) return paymentModule;
+          throw new Error(`Unexpected key ${key}`);
+        }),
+      },
+    };
+
+    return { req, logger, updatePaymentSession };
+  }
+
+  it("logs structured context and stores P24 details on the session", async () => {
+    const { req, logger, updatePaymentSession } = buildReq();
+    const p24Error = new P24ApiError({
+      status: 400,
+      statusText: "Bad Request",
+      method: "POST",
+      endpoint: "/paymentMethod/blik/chargeByCode",
+      responseText: JSON.stringify({
+        error: `Invalid token ${SECRET_TOKEN}`,
+        code: 400,
+      }),
+      secrets: [SECRET_TOKEN],
+    });
+
+    await expect(
+      handleP24Charge({
+        req: req as never,
+        paymentSessionId: "payses_1",
+        execute: () => Promise.reject(p24Error),
+      }),
+    ).rejects.toBe(p24Error);
+
+    const expectedMessage =
+      "P24 API request failed: 400 Bad Request - 400: Invalid token [REDACTED]";
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const logLine = logger.error.mock.calls[0][0] as string;
+    expect(logLine).toContain(`[p24-charge] ${expectedMessage}`);
+    expect(logLine).not.toContain(SECRET_TOKEN);
+    expect(JSON.parse(logLine.split("context=")[1])).toEqual({
+      payment_session_id: "payses_1",
+      p24_session_id: "payses_1-retry",
+      cart_id: "cart_1",
+      amount_grosze: 1234,
+      endpoint: "/paymentMethod/blik/chargeByCode",
+      http_status: 400,
+      p24_code: 400,
+      p24_description: "Invalid token [REDACTED]",
+    });
+
+    const update = updatePaymentSession.mock.calls[0][0];
+    expect(update.status).toBe("error");
+    expect(update.data).toMatchObject({
+      error_message: expectedMessage,
+      error_http_status: 400,
+      error_p24_code: 400,
+      error_p24_description: "Invalid token [REDACTED]",
+      error_endpoint: "/paymentMethod/blik/chargeByCode",
+      error_session_id: "payses_1-retry",
+      error_amount_grosze: 1234,
+    });
+    expect(typeof update.data.failed_at).toBe("string");
+  });
+
+  it("clears stale P24 fields for non-P24 errors", async () => {
+    const { req, updatePaymentSession } = buildReq();
+
+    await expect(
+      handleP24Charge({
+        req: req as never,
+        paymentSessionId: "payses_1",
+        execute: () => Promise.reject(new Error("BLIK code expired")),
+      }),
+    ).rejects.toThrow("BLIK code expired");
+
+    expect(updatePaymentSession.mock.calls[0][0].data).toMatchObject({
+      error_message: "BLIK code expired",
+      error_http_status: null,
+      error_p24_code: null,
+      error_endpoint: null,
+      error_amount_grosze: 1234,
+    });
   });
 });
 

@@ -17,20 +17,10 @@ import {
   P24WebhookPayload,
 } from "../types";
 import { coerceSandbox } from "../../../utils/coerce-sandbox";
-import { buildLocalizedP24ErrorMessage } from "../../../utils/p24-errors";
+import { P24ApiError } from "../../../utils/p24-api-error";
 import { isAllowedP24WebhookSourceIp } from "../../../utils/p24-webhook-ips";
 
-export class P24ApiError extends Error {
-  readonly responseCode?: number;
-  readonly payload?: unknown;
-
-  constructor(message: string, responseCode?: number, payload?: unknown) {
-    super(message);
-    this.name = "P24ApiError";
-    this.responseCode = responseCode;
-    this.payload = payload;
-  }
-}
+export { P24ApiError };
 
 export class P24ApiService {
   private readonly options: P24Options;
@@ -223,6 +213,23 @@ export class P24ApiService {
     });
 
     const responseText = await response.text();
+
+    if (!response.ok) {
+      throw new P24ApiError({
+        status: response.status,
+        statusText: response.statusText,
+        method,
+        endpoint,
+        responseText,
+        secrets: [
+          this.options.api_key,
+          this.options.crc,
+          credentials,
+          ...collectRequestSecrets(data),
+        ],
+      });
+    }
+
     let parsed: unknown = {};
 
     if (responseText) {
@@ -231,17 +238,6 @@ export class P24ApiService {
       } catch {
         parsed = { message: responseText };
       }
-    }
-
-    if (!response.ok) {
-      throw new P24ApiError(
-        buildLocalizedP24ErrorMessage(
-          parsed,
-          `P24 API request failed: ${response.status} ${response.statusText}`,
-        ),
-        (parsed as { responseCode?: number })?.responseCode,
-        parsed,
-      );
     }
 
     return parsed;
@@ -385,4 +381,15 @@ export class P24ApiService {
 
     return `${base}/inchtml/ajaxPayment/ajax.js?token=${encodeURIComponent(token)}`;
   }
+}
+
+function collectRequestSecrets(data: unknown): string[] {
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+
+  const record = data as Record<string, unknown>;
+  return ["token", "sign", "blikCode"]
+    .map((key) => record[key])
+    .filter((value): value is string => typeof value === "string");
 }
