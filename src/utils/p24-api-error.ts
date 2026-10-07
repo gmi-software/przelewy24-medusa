@@ -5,24 +5,31 @@ export const P24_ERROR_BODY_MAX_LENGTH = 1000;
 
 const REDACTED = "[REDACTED]";
 
-const SECRET_KEYS = new Set([
+const SECRET_KEYS = new Set(["sign", "crc"]);
+
+/** Any key containing one of these (after dropping `_`/`-`) is masked, e.g. `access_token`, `cardToken`. */
+const SECRET_KEY_FRAGMENTS = [
   "token",
-  "sign",
-  "crc",
-  "apikey",
-  "api_key",
   "secret",
-  "secretid",
   "password",
+  "apikey",
   "authorization",
-  "credentials",
-]);
+  "credential",
+];
 
 const SECRET_TEXT_PATTERNS: RegExp[] = [
   /\b(Basic|Bearer)\s+[A-Za-z0-9+/=._-]+/gi,
-  /("(?:token|sign|crc|api_?key|secret|password|authorization)"\s*:\s*")[^"]*(")/gi,
-  /\b((?:token|sign|crc|api_?key|secret|password)\s*[=:]\s*)[^\s&,;"']+/gi,
+  /("(?:[\w-]*(?:token|secret|password|api_?key|authorization|credential)[\w-]*|sign|crc)"\s*:\s*")[^"]*(")/gi,
+  /\b((?:[\w-]*(?:token|secret|password|api_?key|credential)[\w-]*|sign|crc)\s*[=:]\s*)[^\s&,;"']+/gi,
 ];
+
+function isSecretKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return (
+    SECRET_KEYS.has(normalized) ||
+    SECRET_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment))
+  );
+}
 
 export type P24ApiErrorInit = {
   status: number;
@@ -171,7 +178,7 @@ export function maskSecretsInValue(
   const output: Record<string, unknown> = {};
 
   for (const [key, nested] of Object.entries(value)) {
-    output[key] = SECRET_KEYS.has(key.toLowerCase())
+    output[key] = isSecretKey(key)
       ? REDACTED
       : maskSecretsInValue(nested, secrets);
   }

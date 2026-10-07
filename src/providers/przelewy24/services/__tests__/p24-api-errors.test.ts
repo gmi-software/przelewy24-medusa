@@ -179,6 +179,34 @@ describe('P24ApiService error responses', () => {
     expect(error.message).toContain('token=[REDACTED]')
   })
 
+  it('masks secret-like keys and key=value pairs beyond exact names', async () => {
+    mockFetchResponse(
+      400,
+      'Bad Request',
+      JSON.stringify({
+        error: 'Rejected access_token=at-secret-1 refresh-token: rt-secret-2',
+        code: 400,
+        data: { access_token: 'at-secret-3', cardToken: 'ct-secret-4', clientSecret: 'cs-5' },
+        raw: '{"access_token":"at-secret-6"}',
+      }),
+    )
+
+    const error = await captureError(api.getCardInfo(1))
+
+    const serialized = JSON.stringify({
+      message: error.message,
+      description: error.p24Description,
+      body: error.responseBody,
+    })
+
+    for (const secret of ['at-secret-1', 'rt-secret-2', 'at-secret-3', 'ct-secret-4', 'cs-5', 'at-secret-6']) {
+      expect(serialized).not.toContain(secret)
+    }
+    expect(error.p24Description).toBe(
+      'Rejected access_token=[REDACTED] refresh-token: [REDACTED]',
+    )
+  })
+
   it('stays detectable as an expected stale payment job failure', async () => {
     mockFetchResponse(
       400,
