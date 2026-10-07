@@ -9,6 +9,7 @@ import {
   resolveP24Provider,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
+import { getP24UserFacingMessage } from "../../../../../utils/p24-api-error";
 
 const BLIK_PROVIDER_ID = `pp_${PaymentProviderKeys.P24_BLIK}_przelewy24`;
 
@@ -60,12 +61,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     return res.status(200).json(result);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "BLIK payment failed";
-
     return res.status(400).json({
       error: "BLIK payment failed",
-      message,
+      message: getP24UserFacingMessage(error, "BLIK payment failed"),
     });
   }
 }

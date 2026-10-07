@@ -1,10 +1,16 @@
 import { MedusaRequest } from "@medusajs/framework/http";
+import { PaymentSessionDTO } from "@medusajs/framework/types";
 import {
   ContainerRegistrationKeys,
   Modules,
   PaymentSessionStatus,
 } from "@medusajs/framework/utils";
+import {
+  getP24FailureDetails,
+  P24FailureDetails,
+} from "../../../../utils/p24-api-error";
 import { buildLocalizedP24ErrorMessage } from "../../../../utils/p24-errors";
+import { getSessionId } from "../../../../utils/p24-session-data";
 import { PaymentProviderKeys } from "../../../../providers/przelewy24/types";
 
 type ChargeExecutorResult = {
@@ -27,13 +33,56 @@ type P24ChargeResponse = {
   message?: string;
 };
 
+export type P24ChargeFailureContext = {
+  payment_session_id?: string;
+  p24_session_id?: string;
+  cart_id?: string;
+  amount_grosze?: number;
+  endpoint?: string;
+  http_status?: number;
+  p24_code?: string | number;
+  p24_description?: string;
+};
+
+export function buildChargeFailureContext(input: {
+  paymentSessionId?: string;
+  sessionData?: Record<string, unknown> | null;
+  cartId?: string;
+  failure: P24FailureDetails;
+}): P24ChargeFailureContext {
+  const data = input.sessionData ?? {};
+  const amountGrosze = data.amount_grosze;
+
+  const context: P24ChargeFailureContext = {
+    payment_session_id: input.paymentSessionId,
+    p24_session_id: getSessionId(data),
+    cart_id: input.cartId,
+    amount_grosze:
+      typeof amountGrosze === "number" && Number.isFinite(amountGrosze)
+        ? amountGrosze
+        : undefined,
+    endpoint: input.failure.endpoint,
+    http_status: input.failure.http_status,
+    p24_code: input.failure.p24_code,
+    p24_description: input.failure.p24_description,
+  };
+
+  return Object.fromEntries(
+    Object.entries(context).filter(([, value]) => value !== undefined),
+  ) as P24ChargeFailureContext;
+}
+
 export async function markPaymentSessionError(
   req: MedusaRequest,
   paymentSessionId: string,
   errorMessage: string,
+  context: P24ChargeFailureContext = {},
+  existingSession?: PaymentSessionDTO,
 ): Promise<void> {
   const paymentModule = req.scope.resolve(Modules.PAYMENT);
-  const session = await paymentModule.retrievePaymentSession(paymentSessionId);
+  const session =
+    existingSession ??
+    (await paymentModule.retrievePaymentSession(paymentSessionId));
 
   await paymentModule.updatePaymentSession({
     id: paymentSessionId,
@@ -43,9 +92,47 @@ export async function markPaymentSessionError(
     data: {
       ...(session.data ?? {}),
       error_message: errorMessage,
+      error_http_status: context.http_status ?? null,
+      error_p24_code: context.p24_code ?? null,
+      error_p24_description: context.p24_description ?? null,
+      error_endpoint: context.endpoint ?? null,
+      error_session_id: context.p24_session_id ?? null,
+      error_amount_grosze: context.amount_grosze ?? null,
       failed_at: new Date().toISOString(),
     },
   });
+}
+
+async function retrievePaymentSessionSafely(
+  req: MedusaRequest,
+  paymentSessionId: string,
+): Promise<PaymentSessionDTO | undefined> {
+  try {
+    const paymentModule = req.scope.resolve(Modules.PAYMENT);
+    return await paymentModule.retrievePaymentSession(paymentSessionId);
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveCartIdSafely(
+  req: MedusaRequest,
+  paymentSessionId: string,
+): Promise<string | undefined> {
+  try {
+    const query = req.scope.resolve(ContainerRegistrationKeys.QUERY);
+    const { data } = await query.graph({
+      entity: "payment_session",
+      fields: ["payment_collection.cart.id"],
+      filters: { id: paymentSessionId },
+    });
+    const cartId = (
+      data?.[0] as { payment_collection?: { cart?: { id?: unknown } } }
+    )?.payment_collection?.cart?.id;
+    return typeof cartId === "string" ? cartId : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseP24ChargeResponse(
@@ -95,13 +182,32 @@ export async function handleP24Charge({
       message: result.message,
     };
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unknown payment charge error";
+    const failure = getP24FailureDetails(error);
+    const session = paymentSessionId
+      ? await retrievePaymentSessionSafely(req, paymentSessionId)
+      : undefined;
+    const cartId = paymentSessionId
+      ? await resolveCartIdSafely(req, paymentSessionId)
+      : undefined;
+    const context = buildChargeFailureContext({
+      paymentSessionId,
+      sessionData: session?.data,
+      cartId,
+      failure,
+    });
 
-    logger.error(`[p24-charge] ${message}`);
+    logger.error(
+      `[p24-charge] ${failure.message} context=${JSON.stringify(context)}`,
+    );
 
     if (paymentSessionId) {
-      await markPaymentSessionError(req, paymentSessionId, message).catch(
+      await markPaymentSessionError(
+        req,
+        paymentSessionId,
+        failure.message,
+        context,
+        session,
+      ).catch(
         (markError) => {
           logger.error(
             `[p24-charge] Failed to mark payment session ${paymentSessionId} as error: ${

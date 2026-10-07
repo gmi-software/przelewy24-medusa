@@ -7,6 +7,7 @@ import {
   type P24TransactionStatusQueryProvider,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
+import { getP24UserFacingMessage } from "../../../../../utils/p24-api-error";
 
 const statusSchema = z.object({
   session_id: z.string().min(1),
@@ -49,12 +50,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       status: medusaStatus,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to query transaction status";
-
     return res.status(400).json({
       error: "Failed to query transaction status",
-      message,
+      message: getP24UserFacingMessage(error, "Failed to query transaction status"),
     });
   }
 }

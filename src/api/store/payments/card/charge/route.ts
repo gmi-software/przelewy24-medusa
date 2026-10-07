@@ -1,14 +1,23 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { Modules } from "@medusajs/framework/utils";
+import { PaymentSessionDTO } from "@medusajs/framework/types";
+import {
+  ContainerRegistrationKeys,
+  Modules,
+} from "@medusajs/framework/utils";
 import { z } from "zod";
 
 import P24CardsService from "../../../../../providers/przelewy24/services/p24-cards";
 import {
   assertPaymentSessionProvider,
+  buildChargeFailureContext,
   resolveP24Provider,
   resolvePaymentSessionIdempotencyKey,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
+import {
+  getP24FailureDetails,
+  getP24UserFacingMessage,
+} from "../../../../../utils/p24-api-error";
 import { normalizeP24SessionData } from "../../../../../utils/p24-session-data";
 
 const CARDS_PROVIDER_ID = `pp_${PaymentProviderKeys.P24_CARDS}_przelewy24`;
@@ -34,9 +43,11 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const { ref_id, payment_session_id } = validationResult.data;
 
+  let paymentSession: PaymentSessionDTO | undefined;
+
   try {
     const paymentModule = req.scope.resolve(Modules.PAYMENT);
-    const paymentSession =
+    paymentSession =
       await paymentModule.retrievePaymentSession(payment_session_id);
 
     assertPaymentSessionProvider(paymentSession, CARDS_PROVIDER_ID);
@@ -80,12 +91,22 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
       sessionId: result.sessionId,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Card payment failed";
+    const failure = getP24FailureDetails(error);
+    const context = buildChargeFailureContext({
+      paymentSessionId: payment_session_id,
+      sessionData: paymentSession?.data,
+      failure,
+    });
+
+    req.scope
+      .resolve(ContainerRegistrationKeys.LOGGER)
+      .error(
+        `[p24-card-charge] ${failure.message} context=${JSON.stringify(context)}`,
+      );
 
     return res.status(400).json({
       error: "Card payment failed",
-      message,
+      message: getP24UserFacingMessage(error, "Card payment failed"),
     });
   }
 }
