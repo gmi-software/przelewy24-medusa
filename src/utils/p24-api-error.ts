@@ -61,7 +61,7 @@ export class P24ApiError extends Error {
     const secrets = init.secrets ?? [];
     const responseBody = parseMaskedBody(init.responseText, secrets);
     const { code, description } = extractP24ErrorDetails(responseBody);
-    const prefix = `P24 API request failed: ${init.status} ${init.statusText}`;
+    const prefix = formatP24ApiErrorPrefix(init.status, init.statusText);
     const detail = formatDetail(code, description);
 
     super(detail ? `${prefix} - ${detail}` : prefix);
@@ -109,10 +109,16 @@ export function getP24FailureDetails(error: unknown): P24FailureDetails {
   };
 }
 
-/** Message safe to return to the storefront: localized for known P24 codes, technical otherwise. */
+/**
+ * Message safe to return to the storefront: localized for known P24 codes,
+ * otherwise only the status line. Upstream response text stays in logs and
+ * session data because masking cannot catch every secret format.
+ */
 export function getP24UserFacingMessage(error: unknown, fallback: string): string {
   if (error instanceof P24ApiError) {
-    return error.localizedMessage ?? error.message;
+    return (
+      error.localizedMessage ?? formatP24ApiErrorPrefix(error.status, error.statusText)
+    );
   }
 
   return error instanceof Error ? error.message : fallback;
@@ -253,6 +259,10 @@ function formatDetail(
   }
 
   return description ?? (code != null ? String(code) : undefined);
+}
+
+function formatP24ApiErrorPrefix(status: number, statusText: string): string {
+  return `P24 API request failed: ${status} ${statusText}`;
 }
 
 function stripQuery(endpoint: string): string {

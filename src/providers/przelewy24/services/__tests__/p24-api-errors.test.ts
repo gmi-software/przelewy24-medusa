@@ -5,7 +5,10 @@ import {
   getJobErrorMessage,
   isExpectedStalePaymentJobFailure,
 } from '../../../../utils/payment-job-errors'
-import { P24_ERROR_BODY_MAX_LENGTH } from '../../../../utils/p24-api-error'
+import {
+  getP24UserFacingMessage,
+  P24_ERROR_BODY_MAX_LENGTH,
+} from '../../../../utils/p24-api-error'
 
 const TEST_OPTIONS = {
   merchant_id: '12345',
@@ -199,5 +202,61 @@ describe('P24ApiService error responses', () => {
       data: { token: 't' },
       responseCode: 0,
     })
+  })
+})
+
+describe('getP24UserFacingMessage', () => {
+  const api = new P24ApiService(TEST_OPTIONS)
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns the localized message for known P24 codes', async () => {
+    mockFetchResponse(
+      400,
+      'Bad Request',
+      JSON.stringify({ error: { amount: 'Invalid amount' }, code: 'err103' }),
+    )
+
+    const error = await captureError(api.getCardInfo(1))
+
+    expect(getP24UserFacingMessage(error, 'fallback')).toBe(
+      'Nieprawidłowa kwota transakcji.',
+    )
+  })
+
+  it('returns only the status line for unknown P24 codes', async () => {
+    mockFetchResponse(
+      400,
+      'Bad Request',
+      JSON.stringify({ error: 'Incorrect blikCode', code: 400 }),
+    )
+
+    const error = await captureError(
+      api.chargeBlikByCode({ token: BLIK_TOKEN, blikCode: '777123' }),
+    )
+
+    expect(getP24UserFacingMessage(error, 'fallback')).toBe(
+      'P24 API request failed: 400 Bad Request',
+    )
+  })
+
+  it('does not expose non-JSON upstream bodies', async () => {
+    mockFetchResponse(502, 'Bad Gateway', '<html>proxy sessionId=payses_01ABC</html>')
+
+    const error = await captureError(api.getCardInfo(1))
+
+    expect(error.message).toContain('<html>')
+    expect(getP24UserFacingMessage(error, 'fallback')).toBe(
+      'P24 API request failed: 502 Bad Gateway',
+    )
+  })
+
+  it('keeps messages of other errors and falls back for non-errors', () => {
+    expect(getP24UserFacingMessage(new Error('Session not found'), 'fallback')).toBe(
+      'Session not found',
+    )
+    expect(getP24UserFacingMessage('boom', 'fallback')).toBe('fallback')
   })
 })
