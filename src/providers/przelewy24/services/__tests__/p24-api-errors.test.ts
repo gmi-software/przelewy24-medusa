@@ -207,6 +207,21 @@ describe('P24ApiService error responses', () => {
     )
   })
 
+  it('masks quoted values in key=value text bodies', async () => {
+    mockFetchResponse(
+      500,
+      'Internal Server Error',
+      `access_token="at-quoted-1" client_secret='cs-quoted-2' sign = "sg-quoted-3"`,
+    )
+
+    const error = await captureError(api.getCardInfo(1))
+
+    expect(error.message).not.toMatch(/at-quoted-1|cs-quoted-2|sg-quoted-3/)
+    expect(error.p24Description).toBe(
+      `access_token="[REDACTED]" client_secret='[REDACTED]' sign = "[REDACTED]"`,
+    )
+  })
+
   it('stays detectable as an expected stale payment job failure', async () => {
     mockFetchResponse(
       400,

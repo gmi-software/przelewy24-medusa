@@ -20,7 +20,7 @@ const SECRET_KEY_FRAGMENTS = [
 const SECRET_TEXT_PATTERNS: RegExp[] = [
   /\b(Basic|Bearer)\s+[A-Za-z0-9+/=._-]+/gi,
   /("(?:[\w-]*(?:token|secret|password|api_?key|authorization|credential)[\w-]*|sign|crc)"\s*:\s*")[^"]*(")/gi,
-  /\b((?:[\w-]*(?:token|secret|password|api_?key|credential)[\w-]*|sign|crc)\s*[=:]\s*)[^\s&,;"']+/gi,
+  /\b((?:[\w-]*(?:token|secret|password|api_?key|credential)[\w-]*|sign|crc)\s*[=:]\s*["']?)[^\s&,;"']+/gi,
 ];
 
 function isSecretKey(key: string): boolean {
