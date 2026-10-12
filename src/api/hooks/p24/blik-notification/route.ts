@@ -11,6 +11,7 @@ import {
 } from "../../../../providers/przelewy24/core/p24-blik-notification";
 import { extractP24WebhookSourceIp } from "../../../../providers/przelewy24/core/p24-webhook";
 import { PaymentProviderKeys } from "../../../../providers/przelewy24/types";
+import { withP24PaymentSessionLock } from "../../../../utils/p24-payment-session-lock";
 import {
   markPaymentSessionError,
   resolveP24Provider,
@@ -65,6 +66,8 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
           session,
         );
       },
+      withSessionLock: (paymentSessionId, job) =>
+        withP24PaymentSessionLock(req.scope, paymentSessionId, job),
       warn: (message) => logger.warn(`${LOG_PREFIX} ${message}`),
     },
     {

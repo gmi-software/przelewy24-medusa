@@ -118,8 +118,44 @@ export type P24BlikNotificationDeps = {
     session: PaymentSessionDTO,
     payload: P24BlikNotificationPayload,
   ) => Promise<void>;
+  withSessionLock: <T>(
+    paymentSessionId: string,
+    job: () => Promise<T>,
+  ) => Promise<T>;
   warn: (message: string) => void;
 };
+
+type AwaitingSessionLookup =
+  | { session: PaymentSessionDTO }
+  | { reason: string };
+
+async function findAwaitingBlikSession(
+  deps: P24BlikNotificationDeps,
+  paymentSessionId: string,
+  p24SessionId: string,
+): Promise<AwaitingSessionLookup> {
+  let session: PaymentSessionDTO;
+  try {
+    session = await deps.retrievePaymentSession(paymentSessionId);
+  } catch {
+    return { reason: "payment session not found" };
+  }
+
+  if (session.provider_id !== BLIK_PROVIDER_ID) {
+    return { reason: `provider ${session.provider_id}` };
+  }
+
+  const data = (session.data ?? {}) as Record<string, unknown>;
+  if (getSessionId(data) !== p24SessionId) {
+    return { reason: "superseded P24 registration" };
+  }
+
+  if (!AWAITING_STATUSES.has(session.status)) {
+    return { reason: `session already ${session.status}` };
+  }
+
+  return { session };
+}
 
 /**
  * Marks the BLIK session as failed when P24 reports a rejected charge, so the
@@ -166,24 +202,24 @@ export async function handleP24BlikNotification(
     return { kind: "ignored", reason: "not a Medusa payment session" };
   }
 
-  let session: PaymentSessionDTO;
-  try {
-    session = await deps.retrievePaymentSession(paymentSessionId);
-  } catch {
-    return { kind: "ignored", reason: "payment session not found" };
-  }
+  return deps.withSessionLock(paymentSessionId, () =>
+    settleRejection(deps, paymentSessionId, payload),
+  );
+}
 
-  if (session.provider_id !== BLIK_PROVIDER_ID) {
-    return { kind: "ignored", reason: `provider ${session.provider_id}` };
-  }
+async function settleRejection(
+  deps: P24BlikNotificationDeps,
+  paymentSessionId: string,
+  payload: P24BlikNotificationPayload,
+): Promise<P24BlikNotificationOutcome> {
+  const lookup = await findAwaitingBlikSession(
+    deps,
+    paymentSessionId,
+    payload.sessionId,
+  );
 
-  const data = (session.data ?? {}) as Record<string, unknown>;
-  if (getSessionId(data) !== payload.sessionId) {
-    return { kind: "ignored", reason: "superseded P24 registration" };
-  }
-
-  if (!AWAITING_STATUSES.has(session.status)) {
-    return { kind: "ignored", reason: `session already ${session.status}` };
+  if ("reason" in lookup) {
+    return { kind: "ignored", reason: lookup.reason };
   }
 
   try {
@@ -203,7 +239,19 @@ export async function handleP24BlikNotification(
     );
   }
 
-  await deps.markFailed(session, payload);
+  // The lock only excludes plugin writers; the P24 round trip above leaves
+  // room for the host (e.g. urlStatus capture) to settle the session.
+  const latest = await findAwaitingBlikSession(
+    deps,
+    paymentSessionId,
+    payload.sessionId,
+  );
 
-  return { kind: "marked_failed", paymentSessionId: session.id };
+  if ("reason" in latest) {
+    return { kind: "ignored", reason: latest.reason };
+  }
+
+  await deps.markFailed(latest.session, payload);
+
+  return { kind: "marked_failed", paymentSessionId: latest.session.id };
 }

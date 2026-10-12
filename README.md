@@ -283,7 +283,7 @@ window.location.href = paymentSession.data.redirect_url;
 
 BLIK does not use redirect URLs.
 
-`urlStatus` is only called for paid transactions. When the customer rejects the payment in the banking app (or the bank declines it), P24 sends the additional BLIK notification to `{backend_url}/hooks/p24/blik-notification`; the plugin then marks the payment session `error`, so `complete` fails and `POST /store/payments/transaction/status` returns `status: "error"` instead of a pending payment. A BLIK token is single-use: `POST /store/payments/blik/charge` rejects sessions that were already charged or are no longer `pending`/`requires_more` — create a new payment session to retry.
+`urlStatus` is only called for paid transactions. When the customer rejects the payment in the banking app (or the bank declines it), P24 sends the additional BLIK notification to `{backend_url}/hooks/p24/blik-notification`; the plugin then marks the payment session `error`, so `complete` fails and `POST /store/payments/transaction/status` returns `status: "error"` instead of a pending payment. A BLIK token is single-use: `POST /store/payments/blik/charge` rejects sessions that were already charged or are no longer `pending`/`requires_more` — create a new payment session to retry. Charges and rejection notifications for one session are serialised through the Medusa Locking Module; with several Medusa instances, configure a shared locking provider such as `@medusajs/medusa/locking-redis`.
 
 ### 2. Cards (P24 Card 2.0 white-label)
 

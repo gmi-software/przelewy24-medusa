@@ -7,7 +7,7 @@
 
 ### Changed
 - `POST /store/payments/transaction/status` returns `status: "error"`/`"canceled"` (with `p24_status` as reported, or `null` if P24 could not be queried) when P24 does not report the transaction as paid and the Medusa session bound to that P24 session id has failed
-- `POST /store/payments/blik/charge` rejects sessions that are not `pending`/`requires_more` or whose token was already charged, and stores `charge_submitted_at` on the session after a successful charge. `updatePayment` drops `charge_submitted_at` when it registers a new token
+- `POST /store/payments/blik/charge` rejects sessions that are not `pending`/`requires_more` or whose token was already charged, and stores `charge_submitted_at` on the session before sending the code to P24 (if that write fails, P24 is not called). The check, the reservation and the charge run under a per-session lock from the Medusa Locking Module, shared with the BLIK notification handler — configure a shared locking provider (e.g. Redis) when running several Medusa instances. `updatePayment` drops `charge_submitted_at` when it registers a new token
 
 ## 0.1.5
 

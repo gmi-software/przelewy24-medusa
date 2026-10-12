@@ -8,7 +8,7 @@ import { P24ApiError } from "../../../../../utils/p24-api-error";
 import {
   assertBlikChargeMatchesPaymentSession,
   handleP24Charge,
-  markPaymentSessionChargeSubmitted,
+  reserveBlikCharge,
   resolveP24Provider,
   resolveP24SessionFailureStatus,
   resolveP24ProviderKeyForStatus,
@@ -93,7 +93,7 @@ describe("assertBlikChargeMatchesPaymentSession", () => {
         "tok_abc",
         "pp_p24-blik_przelewy24",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ id: "payses_1" });
   });
 
   it("rejects token mismatch", async () => {
@@ -185,7 +185,7 @@ describe("assertBlikChargeMatchesPaymentSession", () => {
     ).rejects.toThrow("already charged");
   });
 
-  it("accepts a pending session that was never charged", async () => {
+  it("returns a pending session that was never charged", async () => {
     await expect(
       assertBlikChargeMatchesPaymentSession(
         reqWithSession({ status: "pending", data: { token: "tok_abc" } }) as never,
@@ -193,39 +193,41 @@ describe("assertBlikChargeMatchesPaymentSession", () => {
         "tok_abc",
         "pp_p24-blik_przelewy24",
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ id: "payses_1", status: "pending" });
   });
 });
 
-describe("markPaymentSessionChargeSubmitted", () => {
-  it("stamps the session without touching status or amount", async () => {
+describe("reserveBlikCharge", () => {
+  it("stamps the session it was given without touching status or amount", async () => {
     const updatePaymentSession = vi.fn().mockResolvedValue({});
+    const retrievePaymentSession = vi.fn();
     const req = {
       scope: {
         resolve: vi.fn().mockReturnValue({
-          retrievePaymentSession: vi.fn().mockResolvedValue({
-            id: "payses_1",
-            status: "error",
-            amount: 672,
-            currency_code: "pln",
-            data: { session_id: "payses_1", token: "tok", amount: 672 },
-          }),
+          retrievePaymentSession,
           updatePaymentSession,
         }),
       },
     };
 
-    await markPaymentSessionChargeSubmitted(
+    await reserveBlikCharge(
       req as never,
-      "payses_1",
+      {
+        id: "payses_1",
+        status: "pending",
+        amount: 672,
+        currency_code: "pln",
+        data: { session_id: "payses_1", token: "tok", amount: 672 },
+      } as never,
       new Date("2026-10-12T08:45:22.000Z"),
     );
 
+    expect(retrievePaymentSession).not.toHaveBeenCalled();
     expect(updatePaymentSession).toHaveBeenCalledWith({
       id: "payses_1",
       amount: 672,
       currency_code: "pln",
-      status: "error",
+      status: "pending",
       data: {
         session_id: "payses_1",
         token: "tok",

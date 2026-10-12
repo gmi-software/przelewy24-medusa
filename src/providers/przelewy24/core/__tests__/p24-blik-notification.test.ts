@@ -37,6 +37,7 @@ const buildDeps = (
   queryTransactionStatus: vi.fn().mockResolvedValue({ medusaStatus: "pending" }),
   retrievePaymentSession: vi.fn().mockResolvedValue(pendingSession()),
   markFailed: vi.fn().mockResolvedValue(undefined),
+  withSessionLock: vi.fn((_id: string, job: () => Promise<unknown>) => job()) as P24BlikNotificationDeps["withSessionLock"],
   warn: vi.fn(),
   ...overrides,
 });
@@ -206,6 +207,59 @@ describe("handleP24BlikNotification", () => {
       run(deps, rejection({ sessionId: "external-session" })),
     ).resolves.toMatchObject({ kind: "ignored" });
     expect(deps.retrievePaymentSession).not.toHaveBeenCalled();
+  });
+
+  it("reads and writes the session under the payment session lock", async () => {
+    const order: string[] = [];
+    const deps = buildDeps({
+      withSessionLock: (async (id: string, job: () => Promise<unknown>) => {
+        order.push(`lock:${id}`);
+        const result = await job();
+        order.push("unlock");
+        return result;
+      }) as P24BlikNotificationDeps["withSessionLock"],
+      retrievePaymentSession: vi.fn(async () => {
+        order.push("retrieve");
+        return pendingSession();
+      }) as never,
+      markFailed: vi.fn(async () => {
+        order.push("markFailed");
+      }),
+    });
+
+    await run(deps);
+
+    expect(order).toEqual([
+      `lock:${PAYMENT_SESSION_ID}`,
+      "retrieve",
+      "retrieve",
+      "markFailed",
+      "unlock",
+    ]);
+  });
+
+  it("re-checks the session after the P24 status query", async () => {
+    const deps = buildDeps({
+      retrievePaymentSession: vi
+        .fn()
+        .mockResolvedValueOnce(pendingSession())
+        .mockResolvedValueOnce(pendingSession({ status: "authorized" })),
+      queryTransactionStatus: vi.fn().mockRejectedValue(new Error("timeout")),
+    });
+
+    await expect(run(deps)).resolves.toEqual({
+      kind: "ignored",
+      reason: "session already authorized",
+    });
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it("does not take the lock for unsigned or foreign notifications", async () => {
+    const deps = buildDeps({ verifySignature: vi.fn().mockReturnValue(false) });
+
+    await run(deps);
+
+    expect(deps.withSessionLock).not.toHaveBeenCalled();
   });
 
   it("trusts the signed rejection when the P24 status check fails", async () => {

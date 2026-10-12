@@ -1,17 +1,17 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
 import { z } from "zod";
 
 import P24BlikService from "../../../../../providers/przelewy24/services/p24-blik";
 import {
   assertBlikChargeMatchesPaymentSession,
   handleP24Charge,
-  markPaymentSessionChargeSubmitted,
   parseP24ChargeResponse,
+  reserveBlikCharge,
   resolveP24Provider,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
 import { getP24UserFacingMessage } from "../../../../../utils/p24-api-error";
+import { withP24PaymentSessionLock } from "../../../../../utils/p24-payment-session-lock";
 
 const BLIK_PROVIDER_ID = `pp_${PaymentProviderKeys.P24_BLIK}_przelewy24`;
 
@@ -40,36 +40,31 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
   const { token, blikCode, payment_session_id } = validationResult.data;
 
   try {
-    await assertBlikChargeMatchesPaymentSession(
-      req,
-      payment_session_id,
-      token,
-      BLIK_PROVIDER_ID,
-    );
-
     const provider = resolveP24Provider<P24BlikService>(
       req,
       PaymentProviderKeys.P24_BLIK,
     );
 
-    const result = await handleP24Charge({
-      req,
-      paymentSessionId: payment_session_id,
-      execute: async () => {
-        const response = await provider.chargeBlikPayment(token, blikCode);
-        return parseP24ChargeResponse(response);
-      },
-    });
+    const result = await withP24PaymentSessionLock(
+      req.scope,
+      payment_session_id,
+      async () => {
+        const session = await assertBlikChargeMatchesPaymentSession(
+          req,
+          payment_session_id,
+          token,
+          BLIK_PROVIDER_ID,
+        );
+        await reserveBlikCharge(req, session);
 
-    await markPaymentSessionChargeSubmitted(req, payment_session_id).catch(
-      (markError) => {
-        req.scope
-          .resolve(ContainerRegistrationKeys.LOGGER)
-          .error(
-            `[p24-charge] Failed to mark payment session ${payment_session_id} as charged: ${
-              markError instanceof Error ? markError.message : "unknown"
-            }`,
-          );
+        return handleP24Charge({
+          req,
+          paymentSessionId: payment_session_id,
+          execute: async () => {
+            const response = await provider.chargeBlikPayment(token, blikCode);
+            return parseP24ChargeResponse(response);
+          },
+        });
       },
     );
 

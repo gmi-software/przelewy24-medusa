@@ -323,7 +323,7 @@ export async function assertBlikChargeMatchesPaymentSession(
   paymentSessionId: string,
   token: string,
   expectedProviderId: string,
-): Promise<void> {
+): Promise<PaymentSessionDTO> {
   const paymentModule = req.scope.resolve(Modules.PAYMENT);
   const session = await paymentModule.retrievePaymentSession(paymentSessionId);
 
@@ -345,23 +345,26 @@ export async function assertBlikChargeMatchesPaymentSession(
   if (session.data?.[P24_CHARGE_SUBMITTED_AT_KEY] != null) {
     throw new Error("Payment session was already charged");
   }
+
+  return session;
 }
 
 /**
- * Records that `chargeByCode` accepted this registration's token. Status is
- * re-read and written back unchanged so a concurrent BLIK notification that
- * already marked the session failed is not undone.
+ * Spends the session's BLIK token before it reaches P24: a charge whose
+ * reservation cannot be stored is never sent. Call under
+ * `withP24PaymentSessionLock`, right after
+ * `assertBlikChargeMatchesPaymentSession` returned `session`, so no other
+ * plugin write lands in between.
  */
-export async function markPaymentSessionChargeSubmitted(
+export async function reserveBlikCharge(
   req: MedusaRequest,
-  paymentSessionId: string,
+  session: PaymentSessionDTO,
   now: Date = new Date(),
 ): Promise<void> {
   const paymentModule = req.scope.resolve(Modules.PAYMENT);
-  const session = await paymentModule.retrievePaymentSession(paymentSessionId);
 
   await paymentModule.updatePaymentSession({
-    id: paymentSessionId,
+    id: session.id,
     amount: session.amount,
     currency_code: session.currency_code,
     status: session.status,
