@@ -1,7 +1,9 @@
 import P24Base from "../core/p24-base";
+import { P24_BLIK_NOTIFICATION_PATH } from "../core/p24-blik-notification";
 import {
   BlikOptions,
   DEFAULT_BLIK_CHANNEL,
+  P24BlikNotificationPayload,
   P24PaymentIntentOptions,
   PaymentProviderKeys,
 } from "../types";
@@ -36,11 +38,26 @@ class P24BlikService extends P24Base {
     return PaymentProviderKeys.P24_BLIK;
   }
 
+  protected getCardPaymentNotificationUrl(): string {
+    return `${this.options_.backend_url}${P24_BLIK_NOTIFICATION_PATH}`;
+  }
+
   async chargeBlikPayment(token: string, blikCode: string) {
     return this.p24Api.chargeBlikByCode({
       token,
       blikCode,
     });
+  }
+
+  isAllowedNotificationSource(sourceIp: string | undefined): boolean {
+    return this.p24Api.isAllowedWebhookIp(sourceIp);
+  }
+
+  verifyBlikNotificationSignature(
+    payload: P24BlikNotificationPayload,
+  ): boolean {
+    const { sign, ...signed } = payload;
+    return this.p24Api.verifyBlikNotificationSignature(signed, sign);
   }
 }
 

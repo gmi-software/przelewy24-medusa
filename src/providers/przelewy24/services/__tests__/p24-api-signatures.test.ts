@@ -74,6 +74,26 @@ describe('P24ApiService signatures', () => {
     ).toBe(true)
   })
 
+  it('verifies additional BLIK notification signature', () => {
+    const payload = {
+      orderId: 321,
+      sessionId: 'payses_01M4QDQ4B1SH678JHJJC5SGCV1',
+      method: 181,
+      result: { error: 28, message: 'Incorrect ticket!', status: '', trxRef: '' },
+    }
+
+    const sign = hashPayload({ ...payload, crc: TEST_OPTIONS.crc })
+
+    expect(api.verifyBlikNotificationSignature(payload, sign)).toBe(true)
+    expect(
+      api.verifyBlikNotificationSignature(
+        { ...payload, result: { ...payload.result, error: 0 } },
+        sign,
+      ),
+    ).toBe(false)
+    expect(api.verifyBlikNotificationSignature(payload, 'invalid-sign')).toBe(false)
+  })
+
   it('allows sandbox localhost webhook IPs', () => {
     expect(api.isAllowedWebhookIp('127.0.0.1')).toBe(true)
     expect(api.isAllowedWebhookIp('203.0.113.1')).toBe(false)

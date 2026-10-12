@@ -33,6 +33,7 @@ import {
   getSessionId,
   inferMedusaPaymentSessionIdFromP24SessionId,
   normalizeP24SessionData,
+  P24_CHARGE_SUBMITTED_AT_KEY,
 } from "../../../utils/p24-session-data";
 import {
   extractMethodIdFromSessionData,
@@ -185,6 +186,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     const cardRefId =
       typeof data?.card_ref_id === "string" ? data.card_ref_id : undefined;
 
+    const cardPaymentNotificationUrl = this.getCardPaymentNotificationUrl();
+
     const transactionRequest: P24Transaction = {
       sessionId,
       amount: getSmallestUnit(Number(amount), currency_code),
@@ -198,6 +201,9 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       method: normalizedParams.method,
       urlReturn,
       urlStatus: `${this.options_.backend_url}/hooks/payment/${this.getProviderKey()}_przelewy24`,
+      ...(cardPaymentNotificationUrl
+        ? { urlCardPaymentNotification: cardPaymentNotificationUrl }
+        : {}),
       ...(regulationAccept ? { regulationAccept: true } : {}),
     };
 
@@ -220,6 +226,11 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
 
     return transactionRequest;
+  }
+
+  /** `urlCardPaymentNotification` sent on register; providers opt in. */
+  protected getCardPaymentNotificationUrl(): string | undefined {
+    return undefined;
   }
 
   protected resolvePaymentSessionQuery(): PaymentSessionQuery | undefined {
@@ -684,6 +695,10 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
 
     const newP24SessionId = `${baseSessionId}-${crypto.randomUUID()}`;
+    const {
+      [P24_CHARGE_SUBMITTED_AT_KEY]: _previousRegistrationCharge,
+      ...carriedData
+    } = data ?? {};
 
     const initiated = await this.initiatePayment({
       amount,
@@ -693,7 +708,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         idempotency_key: baseSessionId,
       },
       data: {
-        ...data,
+        ...carriedData,
         amount: amountNumeric,
         medusa_payment_session_id: baseSessionId,
         p24_session_id: newP24SessionId,
@@ -702,7 +717,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
     return {
       data: normalizeP24SessionData({
-        ...data,
+        ...carriedData,
         ...initiated.data,
         session_id: initiated.data?.session_id,
         medusa_payment_session_id: baseSessionId,

@@ -283,6 +283,8 @@ window.location.href = paymentSession.data.redirect_url;
 
 BLIK does not use redirect URLs.
 
+`urlStatus` is only called for paid transactions. When the customer rejects the payment in the banking app (or the bank declines it), P24 sends the additional BLIK notification to `{backend_url}/hooks/p24/blik-notification`; the plugin then marks the payment session `error`, so `complete` fails and `POST /store/payments/transaction/status` returns `status: "error"` instead of a pending payment. A BLIK token is single-use: `POST /store/payments/blik/charge` rejects sessions that were already charged or are no longer `pending`/`requires_more` — create a new payment session to retry. Charges and rejection notifications for one session are serialised through the Medusa Locking Module; with several Medusa instances, configure a shared locking provider such as `@medusajs/medusa/locking-redis`.
+
 ### 2. Cards (P24 Card 2.0 white-label)
 
 1. Create payment session → tokenization fields only (`merchant_id`, `session_id`, `card_tokenization_sign`, `amount_grosze`) — **no** `transaction/register` yet
@@ -340,6 +342,14 @@ With `payment-module` config `id: "przelewy24"` (recommended):
 | General     | `{backend_url}/hooks/payment/p24-provider_przelewy24`    |
 
 Medusa route: `POST /hooks/payment/:provider` → `getWebhookActionAndData` → `processPaymentWorkflow`.
+
+BLIK transactions additionally register:
+
+```text
+urlCardPaymentNotification: {backend_url}/hooks/p24/blik-notification
+```
+
+The route accepts only P24 webhook IPs (plus localhost in sandbox) and a valid `sign`, and acts only on rejections for the session's current P24 registration while it is still pending and P24 does not report it as paid. Successful payments keep going through `urlStatus`.
 
 - **`backend_url`** must be the **Medusa** server URL (public HTTPS in production), not the storefront.
 - Webhooks are registered **per transaction**; you do not paste these into the P24 panel for white-label flows.

@@ -140,6 +140,68 @@ describe("P24Base – amount conversion", () => {
   });
 });
 
+describe("P24Base – registration", () => {
+  it("does not register urlCardPaymentNotification unless the provider opts in", async () => {
+    const provider = new TestP24Provider();
+    const mockRegister = vi.fn().mockResolvedValue({
+      responseCode: 0,
+      data: { token: "test-token" },
+    });
+    provider["p24Api"].registerTransaction = mockRegister;
+
+    await provider.initiatePayment({
+      currency_code: "PLN",
+      amount: 10,
+      context: { idempotency_key: "session-123" },
+    } as any);
+
+    expect(mockRegister.mock.calls[0][0]).not.toHaveProperty(
+      "urlCardPaymentNotification",
+    );
+  });
+
+  it("updatePayment drops the charge marker of the superseded token", async () => {
+    const provider = new TestP24Provider();
+    provider["p24Api"].registerTransaction = vi.fn().mockResolvedValue({
+      responseCode: 0,
+      data: { token: "fresh-token" },
+    });
+
+    const result = await provider.updatePayment({
+      amount: 20,
+      currency_code: "PLN",
+      context: {},
+      data: {
+        session_id: "payses_01M4QDQ4B1SH678JHJJC5SGCV1",
+        token: "burned-token",
+        amount: 10,
+        charge_submitted_at: "2026-10-12T08:45:22.000Z",
+      },
+    } as any);
+
+    expect(result.data?.token).toBe("fresh-token");
+    expect(result.data).not.toHaveProperty("charge_submitted_at");
+  });
+
+  it("updatePayment keeps the charge marker when the registration is unchanged", async () => {
+    const provider = new TestP24Provider();
+
+    const result = await provider.updatePayment({
+      amount: 10,
+      currency_code: "PLN",
+      context: {},
+      data: {
+        session_id: "payses_01M4QDQ4B1SH678JHJJC5SGCV1",
+        token: "tok",
+        amount: 10,
+        charge_submitted_at: "2026-10-12T08:45:22.000Z",
+      },
+    } as any);
+
+    expect(result.data?.charge_submitted_at).toBe("2026-10-12T08:45:22.000Z");
+  });
+});
+
 describe("P24Base – findMedusaPaymentSessionId", () => {
   it("returns payses id without touching container query", async () => {
     const provider = new TestP24ProviderWithThrowingQuery();

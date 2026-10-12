@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import {
   P24BlikChargeByCodeData,
+  P24BlikNotificationPayload,
   P24CardChargeResponse,
   P24CardInfoResponse,
   P24CardPaymentNotificationPayload,
@@ -85,6 +86,10 @@ export class P24ApiService {
 
     if (data.additional) {
       requestData.additional = data.additional;
+    }
+
+    if (data.urlCardPaymentNotification) {
+      requestData.urlCardPaymentNotification = data.urlCardPaymentNotification;
     }
 
     return this.makeRequest("/transaction/register", "POST", requestData);
@@ -327,6 +332,21 @@ export class P24ApiService {
         };
 
     const expectedSign = this.hashSignaturePayload(signData);
+    return this.secureCompareHex(expectedSign, receivedSign);
+  }
+
+  verifyBlikNotificationSignature(
+    payload: Omit<P24BlikNotificationPayload, "sign">,
+    receivedSign: string,
+  ): boolean {
+    const expectedSign = this.hashSignaturePayload({
+      orderId: payload.orderId,
+      sessionId: payload.sessionId,
+      method: payload.method,
+      result: payload.result,
+      crc: this.options.crc,
+    });
+
     return this.secureCompareHex(expectedSign, receivedSign);
   }
 

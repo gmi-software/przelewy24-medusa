@@ -10,8 +10,17 @@ import {
   P24FailureDetails,
 } from "../../../../utils/p24-api-error";
 import { buildLocalizedP24ErrorMessage } from "../../../../utils/p24-errors";
-import { getSessionId } from "../../../../utils/p24-session-data";
+import {
+  getSessionId,
+  inferMedusaPaymentSessionIdFromP24SessionId,
+  P24_CHARGE_SUBMITTED_AT_KEY,
+} from "../../../../utils/p24-session-data";
 import { PaymentProviderKeys } from "../../../../providers/przelewy24/types";
+
+const CHARGEABLE_SESSION_STATUSES = new Set<string>([
+  PaymentSessionStatus.PENDING,
+  PaymentSessionStatus.REQUIRES_MORE,
+]);
 
 type ChargeExecutorResult = {
   orderId?: number;
@@ -113,6 +122,38 @@ async function retrievePaymentSessionSafely(
   } catch {
     return undefined;
   }
+}
+
+const DEFINITIVE_FAILURE_STATUSES = new Set<string>([
+  PaymentSessionStatus.ERROR,
+  PaymentSessionStatus.CANCELED,
+]);
+
+/**
+ * `error`/`canceled` when the Medusa session still bound to `p24SessionId`
+ * has definitively failed (rejected charge or rejected BLIK notification).
+ * P24 keeps reporting status `0` for those, same as for a pending payment.
+ */
+export async function resolveP24SessionFailureStatus(
+  req: MedusaRequest,
+  p24SessionId: string,
+): Promise<string | undefined> {
+  const paymentSessionId =
+    inferMedusaPaymentSessionIdFromP24SessionId(p24SessionId);
+
+  if (!paymentSessionId) {
+    return undefined;
+  }
+
+  const session = await retrievePaymentSessionSafely(req, paymentSessionId);
+
+  if (!session || getSessionId(session.data) !== p24SessionId) {
+    return undefined;
+  }
+
+  return DEFINITIVE_FAILURE_STATUSES.has(session.status)
+    ? session.status
+    : undefined;
 }
 
 async function resolveCartIdSafely(
@@ -282,7 +323,7 @@ export async function assertBlikChargeMatchesPaymentSession(
   paymentSessionId: string,
   token: string,
   expectedProviderId: string,
-): Promise<void> {
+): Promise<PaymentSessionDTO> {
   const paymentModule = req.scope.resolve(Modules.PAYMENT);
   const session = await paymentModule.retrievePaymentSession(paymentSessionId);
 
@@ -294,6 +335,44 @@ export async function assertBlikChargeMatchesPaymentSession(
   if (!sessionToken || sessionToken !== token) {
     throw new Error("Payment session token mismatch");
   }
+
+  if (session.status && !CHARGEABLE_SESSION_STATUSES.has(session.status)) {
+    throw new Error(`Payment session is ${session.status}`);
+  }
+
+  // A P24 BLIK token is single-use: whatever the bank decided for the first
+  // chargeByCode, a second one on the same registration cannot succeed.
+  if (session.data?.[P24_CHARGE_SUBMITTED_AT_KEY] != null) {
+    throw new Error("Payment session was already charged");
+  }
+
+  return session;
+}
+
+/**
+ * Spends the session's BLIK token before it reaches P24: a charge whose
+ * reservation cannot be stored is never sent. Call under
+ * `withP24PaymentSessionLock`, right after
+ * `assertBlikChargeMatchesPaymentSession` returned `session`, so no other
+ * plugin write lands in between.
+ */
+export async function reserveBlikCharge(
+  req: MedusaRequest,
+  session: PaymentSessionDTO,
+  now: Date = new Date(),
+): Promise<void> {
+  const paymentModule = req.scope.resolve(Modules.PAYMENT);
+
+  await paymentModule.updatePaymentSession({
+    id: session.id,
+    amount: session.amount,
+    currency_code: session.currency_code,
+    status: session.status,
+    data: {
+      ...(session.data ?? {}),
+      [P24_CHARGE_SUBMITTED_AT_KEY]: now.toISOString(),
+    },
+  });
 }
 
 export type P24TransactionStatusQueryProvider = {
