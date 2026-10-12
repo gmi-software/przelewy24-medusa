@@ -1,10 +1,12 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
 import { z } from "zod";
 
 import P24BlikService from "../../../../../providers/przelewy24/services/p24-blik";
 import {
   assertBlikChargeMatchesPaymentSession,
   handleP24Charge,
+  markPaymentSessionChargeSubmitted,
   parseP24ChargeResponse,
   resolveP24Provider,
 } from "../../utils/charge-helper";
@@ -58,6 +60,18 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
         return parseP24ChargeResponse(response);
       },
     });
+
+    await markPaymentSessionChargeSubmitted(req, payment_session_id).catch(
+      (markError) => {
+        req.scope
+          .resolve(ContainerRegistrationKeys.LOGGER)
+          .error(
+            `[p24-charge] Failed to mark payment session ${payment_session_id} as charged: ${
+              markError instanceof Error ? markError.message : "unknown"
+            }`,
+          );
+      },
+    );
 
     return res.status(200).json(result);
   } catch (error) {

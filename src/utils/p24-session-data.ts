@@ -12,6 +12,9 @@ export function inferMedusaPaymentSessionIdFromP24SessionId(
   return match?.[1];
 }
 
+/** Set on the payment session once P24 accepted a charge for its token. */
+export const P24_CHARGE_SUBMITTED_AT_KEY = "charge_submitted_at";
+
 export type NormalizedP24SessionData = {
   session_id: string;
   token?: string;

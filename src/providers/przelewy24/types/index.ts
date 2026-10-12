@@ -47,6 +47,8 @@ export interface P24Transaction {
   language?: string;
   urlReturn?: string;
   urlStatus?: string;
+  /** Also receives the additional BLIK notification, including rejections. */
+  urlCardPaymentNotification?: string;
   channel?: number;
   method?: number;
   regulationAccept?: boolean;
@@ -162,6 +164,19 @@ export interface P24CardPaymentNotificationPayload {
   hash?: string;
   sign: string;
   status?: string;
+}
+
+/**
+ * Additional BLIK notification sent to `urlCardPaymentNotification` once the
+ * BLIK transaction is resolved — unlike `urlStatus`, also for rejections.
+ * `result` is hashed exactly as received, so it stays an opaque record.
+ */
+export interface P24BlikNotificationPayload {
+  orderId: number;
+  sessionId: string;
+  method: number;
+  result: Record<string, unknown>;
+  sign: string;
 }
 
 export interface P24BlikResponse {

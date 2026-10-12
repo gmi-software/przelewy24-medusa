@@ -8,7 +8,9 @@ import { P24ApiError } from "../../../../../utils/p24-api-error";
 import {
   assertBlikChargeMatchesPaymentSession,
   handleP24Charge,
+  markPaymentSessionChargeSubmitted,
   resolveP24Provider,
+  resolveP24SessionFailureStatus,
   resolveP24ProviderKeyForStatus,
   resolvePaymentProviderById,
   resolvePaymentSessionIdempotencyKey,
@@ -138,6 +140,162 @@ describe("assertBlikChargeMatchesPaymentSession", () => {
         "pp_p24-cards_przelewy24",
       ),
     ).rejects.toThrow("provider mismatch");
+  });
+
+  const reqWithSession = (session: Record<string, unknown>) => ({
+    scope: {
+      resolve: vi.fn().mockReturnValue({
+        retrievePaymentSession: vi.fn().mockResolvedValue({
+          id: "payses_1",
+          provider_id: "pp_p24-blik_przelewy24",
+          ...session,
+        }),
+      }),
+    },
+  });
+
+  it.each(["error", "canceled", "authorized", "captured"])(
+    "rejects a %s session",
+    async (status) => {
+      await expect(
+        assertBlikChargeMatchesPaymentSession(
+          reqWithSession({ status, data: { token: "tok_abc" } }) as never,
+          "payses_1",
+          "tok_abc",
+          "pp_p24-blik_przelewy24",
+        ),
+      ).rejects.toThrow(`Payment session is ${status}`);
+    },
+  );
+
+  it("rejects a token that was already charged", async () => {
+    await expect(
+      assertBlikChargeMatchesPaymentSession(
+        reqWithSession({
+          status: "pending",
+          data: {
+            token: "tok_abc",
+            charge_submitted_at: "2026-10-12T08:45:22.000Z",
+          },
+        }) as never,
+        "payses_1",
+        "tok_abc",
+        "pp_p24-blik_przelewy24",
+      ),
+    ).rejects.toThrow("already charged");
+  });
+
+  it("accepts a pending session that was never charged", async () => {
+    await expect(
+      assertBlikChargeMatchesPaymentSession(
+        reqWithSession({ status: "pending", data: { token: "tok_abc" } }) as never,
+        "payses_1",
+        "tok_abc",
+        "pp_p24-blik_przelewy24",
+      ),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("markPaymentSessionChargeSubmitted", () => {
+  it("stamps the session without touching status or amount", async () => {
+    const updatePaymentSession = vi.fn().mockResolvedValue({});
+    const req = {
+      scope: {
+        resolve: vi.fn().mockReturnValue({
+          retrievePaymentSession: vi.fn().mockResolvedValue({
+            id: "payses_1",
+            status: "error",
+            amount: 672,
+            currency_code: "pln",
+            data: { session_id: "payses_1", token: "tok", amount: 672 },
+          }),
+          updatePaymentSession,
+        }),
+      },
+    };
+
+    await markPaymentSessionChargeSubmitted(
+      req as never,
+      "payses_1",
+      new Date("2026-10-12T08:45:22.000Z"),
+    );
+
+    expect(updatePaymentSession).toHaveBeenCalledWith({
+      id: "payses_1",
+      amount: 672,
+      currency_code: "pln",
+      status: "error",
+      data: {
+        session_id: "payses_1",
+        token: "tok",
+        amount: 672,
+        charge_submitted_at: "2026-10-12T08:45:22.000Z",
+      },
+    });
+  });
+});
+
+describe("resolveP24SessionFailureStatus", () => {
+  const P24_SESSION_ID = "payses_01M4QDQ4B1SH678JHJJC5SGCV1";
+
+  const reqWith = (retrievePaymentSession: ReturnType<typeof vi.fn>) => ({
+    scope: { resolve: vi.fn().mockReturnValue({ retrievePaymentSession }) },
+  });
+
+  it("reports a failed session bound to the queried registration", async () => {
+    const retrievePaymentSession = vi.fn().mockResolvedValue({
+      id: P24_SESSION_ID,
+      status: "error",
+      data: { session_id: P24_SESSION_ID },
+    });
+
+    await expect(
+      resolveP24SessionFailureStatus(
+        reqWith(retrievePaymentSession) as never,
+        P24_SESSION_ID,
+      ),
+    ).resolves.toBe("error");
+  });
+
+  it("ignores pending sessions and superseded registrations", async () => {
+    await expect(
+      resolveP24SessionFailureStatus(
+        reqWith(
+          vi.fn().mockResolvedValue({
+            id: P24_SESSION_ID,
+            status: "pending",
+            data: { session_id: P24_SESSION_ID },
+          }),
+        ) as never,
+        P24_SESSION_ID,
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      resolveP24SessionFailureStatus(
+        reqWith(
+          vi.fn().mockResolvedValue({
+            id: P24_SESSION_ID,
+            status: "error",
+            data: { session_id: `${P24_SESSION_ID}-newer` },
+          }),
+        ) as never,
+        P24_SESSION_ID,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("ignores ids that are not Medusa payment sessions", async () => {
+    const retrievePaymentSession = vi.fn();
+
+    await expect(
+      resolveP24SessionFailureStatus(
+        reqWith(retrievePaymentSession) as never,
+        "external-session",
+      ),
+    ).resolves.toBeUndefined();
+    expect(retrievePaymentSession).not.toHaveBeenCalled();
   });
 });
 

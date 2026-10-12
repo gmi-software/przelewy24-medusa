@@ -1,13 +1,20 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
+import { PaymentSessionStatus } from "@medusajs/framework/utils";
 import { z } from "zod";
 
 import {
   resolveP24Provider,
   resolveP24ProviderKeyForStatus,
+  resolveP24SessionFailureStatus,
   type P24TransactionStatusQueryProvider,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
 import { getP24UserFacingMessage } from "../../../../../utils/p24-api-error";
+
+const PAID_STATUSES = new Set<string>([
+  PaymentSessionStatus.AUTHORIZED,
+  PaymentSessionStatus.CAPTURED,
+]);
 
 const statusSchema = z.object({
   session_id: z.string().min(1),
@@ -29,30 +36,59 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
   const { session_id, provider_key, provider_id } = validationResult.data;
 
+  let provider: P24TransactionStatusQueryProvider;
   try {
-    const providerKey = resolveP24ProviderKeyForStatus({
-      provider_key,
-      provider_id,
-    });
-
-    const provider = resolveP24Provider<P24TransactionStatusQueryProvider>(
+    provider = resolveP24Provider<P24TransactionStatusQueryProvider>(
       req,
-      providerKey,
+      resolveP24ProviderKeyForStatus({ provider_key, provider_id }),
     );
+  } catch (error) {
+    return respondStatusQueryFailure(res, error);
+  }
 
-    const { medusaStatus, p24Status } = await provider.queryTransactionStatus(
-      session_id,
-    );
+  let p24Result: { medusaStatus: string; p24Status: number } | undefined;
+  let p24Error: unknown;
+  try {
+    p24Result = await provider.queryTransactionStatus(session_id);
+  } catch (error) {
+    p24Error = error;
+  }
 
+  if (p24Result && PAID_STATUSES.has(p24Result.medusaStatus)) {
     return res.status(200).json({
       session_id,
-      p24_status: p24Status,
-      status: medusaStatus,
-    });
-  } catch (error) {
-    return res.status(400).json({
-      error: "Failed to query transaction status",
-      message: getP24UserFacingMessage(error, "Failed to query transaction status"),
+      p24_status: p24Result.p24Status,
+      status: p24Result.medusaStatus,
     });
   }
+
+  const failureStatus = await resolveP24SessionFailureStatus(req, session_id);
+
+  if (failureStatus) {
+    return res.status(200).json({
+      session_id,
+      p24_status: p24Result?.p24Status ?? null,
+      status: failureStatus,
+    });
+  }
+
+  if (!p24Result) {
+    return respondStatusQueryFailure(res, p24Error);
+  }
+
+  return res.status(200).json({
+    session_id,
+    p24_status: p24Result.p24Status,
+    status: p24Result.medusaStatus,
+  });
+}
+
+function respondStatusQueryFailure(res: MedusaResponse, error: unknown) {
+  return res.status(400).json({
+    error: "Failed to query transaction status",
+    message: getP24UserFacingMessage(
+      error,
+      "Failed to query transaction status",
+    ),
+  });
 }
