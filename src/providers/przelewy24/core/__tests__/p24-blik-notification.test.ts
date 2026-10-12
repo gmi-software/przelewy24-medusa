@@ -90,6 +90,24 @@ describe("classifyP24BlikNotification", () => {
     expect(classifyP24BlikNotification({ error: "51" })).toBe("failure");
   });
 
+  it("lets the transaction status override the error code", () => {
+    expect(classifyP24BlikNotification({ error: 28, status: "PENDING" })).toBe(
+      "unknown",
+    );
+    expect(
+      classifyP24BlikNotification({ error: "", status: "pending" }),
+    ).toBe("unknown");
+    expect(
+      classifyP24BlikNotification({ error: 0, status: "DECLINED", message: "USER_TIMEOUT" }),
+    ).toBe("failure");
+    expect(classifyP24BlikNotification({ error: 5, status: "AUTHORIZED" })).toBe(
+      "success",
+    );
+    expect(classifyP24BlikNotification({ error: 28, status: "" })).toBe(
+      "failure",
+    );
+  });
+
   it("does not guess when the error code is missing", () => {
     expect(classifyP24BlikNotification({})).toBe("unknown");
     expect(classifyP24BlikNotification({ error: "" })).toBe("unknown");
@@ -146,6 +164,15 @@ describe("handleP24BlikNotification", () => {
       httpStatus: 403,
     });
     expect(forged.retrievePaymentSession).not.toHaveBeenCalled();
+  });
+
+  it("waits while the payment is still pending in the banking app", async () => {
+    const deps = buildDeps();
+
+    await expect(
+      run(deps, rejection({ result: { error: 28, status: "PENDING" } })),
+    ).resolves.toMatchObject({ kind: "ignored" });
+    expect(deps.markFailed).not.toHaveBeenCalled();
   });
 
   it("leaves successful notifications to the urlStatus flow", async () => {

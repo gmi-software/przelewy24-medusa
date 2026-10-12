@@ -72,10 +72,27 @@ export function parseP24BlikNotification(
 
 export type P24BlikNotificationVerdict = "success" | "failure" | "unknown";
 
-/** `result.error` is `0` on success; anything else is a rejection. */
+/**
+ * `result.status` wins when present: P24 sends `PENDING` while the payment
+ * still waits in the banking app, then `AUTHORIZED` or `DECLINED`. Otherwise
+ * `result.error` is `0` on success and anything else is a rejection.
+ */
 export function classifyP24BlikNotification(
   result: Record<string, unknown>,
 ): P24BlikNotificationVerdict {
+  const status =
+    typeof result.status === "string" ? result.status.trim().toUpperCase() : "";
+
+  if (status === "PENDING") {
+    return "unknown";
+  }
+  if (status === "AUTHORIZED") {
+    return "success";
+  }
+  if (status === "DECLINED") {
+    return "failure";
+  }
+
   const error = result.error;
 
   if (error === undefined || error === null || error === "") {
