@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6
 
 ### Added
 - `POST /hooks/p24/blik-notification` — receives the additional BLIK notification (`urlCardPaymentNotification`, now registered for every BLIK transaction). A signed rejection from a P24 IP marks the pending BLIK payment session `error` with `error_p24_code`/`error_p24_description`, so the storefront no longer waits for a `urlStatus` webhook that P24 never sends for rejected BLIK payments. `result.status` takes precedence over `result.error` (`PENDING` is ignored, `DECLINED` is a rejection). Notifications for superseded registrations, settled sessions or transactions P24 reports as paid are acknowledged and ignored
