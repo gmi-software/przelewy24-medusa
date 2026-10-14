@@ -4,6 +4,7 @@
 
 ### Changed
 - The payment webhook no longer verifies a transaction whose paid `amount` differs from the `originAmount` registered for it. It logs both amounts and returns `FAILED`, which Medusa ignores. P24 does not settle an unverified transaction to the merchant and keeps the money at the customer's disposal
+- `authorizePayment` rejects a transaction whose amount reported by P24 differs from the session's registered `amount_grosze`. The error message contains `amount_mismatch: registered <grosze>, paid <grosze>`. Medusa records payments at the session amount, so without this a cart completed with a different paid amount and the payment was never captured
 
 ## 0.1.6
 

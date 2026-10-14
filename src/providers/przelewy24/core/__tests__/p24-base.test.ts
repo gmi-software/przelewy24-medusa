@@ -202,6 +202,43 @@ describe("P24Base – registration", () => {
   });
 });
 
+describe("P24Base – authorizePayment", () => {
+  const authorize = (provider: TestP24Provider, paidGrosze: number) => {
+    provider["p24Api"].getTransactionBySessionId = vi.fn().mockResolvedValue({
+      responseCode: 0,
+      data: {
+        status: 1,
+        orderId: 4303331656,
+        sessionId: "payses_01M487PKK2DV992DQPQW8Z7ZDW",
+        amount: paidGrosze,
+        currency: "PLN",
+      },
+    });
+
+    return provider.authorizePayment({
+      data: {
+        session_id: "payses_01M487PKK2DV992DQPQW8Z7ZDW",
+        amount: 220,
+        amount_grosze: 22000,
+        currency_code: "pln",
+      },
+    } as any);
+  };
+
+  it("rejects a transaction whose amount differs from the registered one", async () => {
+    await expect(authorize(new TestP24Provider(), 22092)).rejects.toThrow(
+      "amount_mismatch: registered 22000, paid 22092",
+    );
+  });
+
+  it("authorizes a transaction paid with the registered amount", async () => {
+    const result = await authorize(new TestP24Provider(), 22000);
+
+    expect(result.status).toBe("authorized");
+    expect(result.data).toMatchObject({ amount: 220, amount_grosze: 22000 });
+  });
+});
+
 describe("P24Base – findMedusaPaymentSessionId", () => {
   it("returns payses id without touching container query", async () => {
     const provider = new TestP24ProviderWithThrowingQuery();
