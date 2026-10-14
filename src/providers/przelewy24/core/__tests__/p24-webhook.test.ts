@@ -164,6 +164,25 @@ describe("processP24Webhook", () => {
     });
   });
 
+  it("leaves the transaction unverified when the paid amount differs from the registered one", async () => {
+    const deps = createDeps();
+
+    const result = await processP24Webhook(deps, {
+      ...webhookData,
+      data: { ...WEBHOOK_PAYLOAD, amount: 5091 },
+    });
+
+    expect(result.action).toBe(PaymentActions.FAILED);
+    expect(result.data).toMatchObject({
+      session_id: "payses_medusa_1",
+      amount: 50.91,
+    });
+    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("paid 5091, registered 4999"),
+    );
+  });
+
   it("returns successful action for verified authorized payments", async () => {
     const deps = createDeps();
 

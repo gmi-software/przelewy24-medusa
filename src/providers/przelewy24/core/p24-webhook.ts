@@ -93,6 +93,24 @@ export async function processP24Webhook(
     const medusaPaymentSessionId =
       await deps.findMedusaPaymentSessionId(sessionId);
 
+    // An unverified transaction is never settled to the merchant, so the
+    // customer keeps the money instead of the order getting a wrong amount.
+    if (
+      payload.originAmount != null &&
+      Number(payload.originAmount) !== amountNum
+    ) {
+      deps.logger.error(
+        `P24 transaction amount mismatch for session ${sessionId} (order ${orderId}): paid ${amountNum}, registered ${payload.originAmount}; left unverified`,
+      );
+      return {
+        action: PaymentActions.FAILED,
+        data: {
+          session_id: medusaPaymentSessionId,
+          amount: amountNormal,
+        },
+      };
+    }
+
     const verification = await deps.p24Api.verifyTransaction(
       sessionId,
       amount,

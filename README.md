@@ -343,6 +343,8 @@ With `payment-module` config `id: "przelewy24"` (recommended):
 
 Medusa route: `POST /hooks/payment/:provider` → `getWebhookActionAndData` → `processPaymentWorkflow`.
 
+A notification whose paid `amount` differs from the registered `originAmount` is not verified with P24 and returns `FAILED` (logged with both amounts). The customer keeps the money, because P24 does not settle unverified transactions.
+
 BLIK transactions additionally register:
 
 ```text
