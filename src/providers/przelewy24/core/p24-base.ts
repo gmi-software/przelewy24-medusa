@@ -447,6 +447,19 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         );
       }
 
+      // Medusa records the payment at the session amount, whatever P24 took
+      const registeredGrosze = input.data?.amount_grosze;
+      const paidGrosze = Number(transactionDetails.data.amount);
+
+      if (typeof registeredGrosze === "number" && paidGrosze !== registeredGrosze) {
+        throw this.buildError(
+          "Payment amount does not match the registered amount",
+          new Error(
+            `amount_mismatch: registered ${registeredGrosze}, paid ${paidGrosze}`,
+          ),
+        );
+      }
+
       let data = await this.enrichPaymentMethodFields(
         normalizeP24SessionData({
           ...input.data,

@@ -318,6 +318,8 @@ See [P24 Card 2.0 docs](https://developers.przelewy24.pl/extended/index.php?pl#t
 | Order creation               | Storefront polls `complete`; Medusa `authorizePayment` queries P24 API; or `complete-captured-carts-backstop` (Medusa, every 2 min) when payment is already captured |
 | Capture + `completed_at`     | P24 webhook to `urlStatus`, or `reconcile-p24-payments` job (every 5 min)                                                                            |
 
+`authorizePayment` rejects a transaction with `amount_mismatch` when the amount P24 reports for it differs from the registered `amount_grosze`. `reconcile-p24-payments` skips such sessions.
+
 **Do not** add a separate store “confirm” route to replace webhooks. Production capture is webhook-driven.
 
 ---
@@ -342,6 +344,8 @@ With `payment-module` config `id: "przelewy24"` (recommended):
 | General     | `{backend_url}/hooks/payment/p24-provider_przelewy24`    |
 
 Medusa route: `POST /hooks/payment/:provider` → `getWebhookActionAndData` → `processPaymentWorkflow`.
+
+A notification whose paid `amount` differs from the registered `originAmount` is not verified with P24 and returns `FAILED` (logged with both amounts). The customer keeps the money, because P24 does not settle unverified transactions.
 
 BLIK transactions additionally register:
 

@@ -4,6 +4,7 @@ import { processPaymentWorkflow } from '@medusajs/medusa/core-flows'
 import { PaymentActions } from '@medusajs/framework/utils'
 
 import { resolvePaymentProviderById, type P24TransactionStatusQueryProvider } from '../api/store/payments/utils/charge-helper'
+import { getSmallestUnit } from '../utils/get-smallest-unit'
 import {
   getJobErrorMessage,
   isExpectedStalePaymentJobFailure,
@@ -92,7 +93,8 @@ export default async function reconcileP24PaymentsJob(
         providerId,
       )
 
-      const { medusaStatus } = await provider.queryTransactionStatus(p24SessionId)
+      const { medusaStatus, transactionDetails } =
+        await provider.queryTransactionStatus(p24SessionId)
 
       if (medusaStatus !== 'captured' && medusaStatus !== 'authorized') {
         continue
@@ -104,6 +106,21 @@ export default async function reconcileP24PaymentsJob(
       )
 
       if (hasCapturedPayment) {
+        continue
+      }
+
+      // Session amount, not data.amount_grosze: authorization overwrites the
+      // latter with the P24 amount. Left unverified, like the webhook does.
+      const sessionGrosze = getSmallestUnit(
+        Number(session.amount),
+        String(sessionData.currency_code ?? sessionData.currency ?? 'pln'),
+      )
+      const paidGrosze = Number(transactionDetails.data.amount)
+
+      if (paidGrosze !== sessionGrosze) {
+        logger.warn(
+          `[p24-reconcile] Skipping payment session ${session.id}: P24 amount ${paidGrosze} differs from session amount ${sessionGrosze}`,
+        )
         continue
       }
 
