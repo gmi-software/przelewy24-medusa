@@ -318,7 +318,7 @@ See [P24 Card 2.0 docs](https://developers.przelewy24.pl/extended/index.php?pl#t
 | Order creation               | Storefront polls `complete`; Medusa `authorizePayment` queries P24 API; or `complete-captured-carts-backstop` (Medusa, every 2 min) when payment is already captured |
 | Capture + `completed_at`     | P24 webhook to `urlStatus`, or `reconcile-p24-payments` job (every 5 min)                                                                            |
 
-`authorizePayment` fails with `amount_mismatch` when the amount P24 reports for the transaction differs from the registered `amount_grosze`, so no order is placed for it.
+`authorizePayment` rejects a transaction with `amount_mismatch` when the amount P24 reports for it differs from the registered `amount_grosze`. `reconcile-p24-payments` skips such sessions.
 
 **Do not** add a separate store “confirm” route to replace webhooks. Production capture is webhook-driven.
 

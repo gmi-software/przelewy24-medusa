@@ -378,7 +378,11 @@ export async function reserveBlikCharge(
 export type P24TransactionStatusQueryProvider = {
   queryTransactionStatus: (
     sessionId: string,
-  ) => Promise<{ medusaStatus: string; p24Status: number }>;
+  ) => Promise<{
+    medusaStatus: string;
+    p24Status: number;
+    transactionDetails: { data: { amount: number } };
+  }>;
 };
 
 function isPaymentProviderKey(value: string): value is PaymentProviderKeys {
