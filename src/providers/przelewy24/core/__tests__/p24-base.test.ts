@@ -265,6 +265,31 @@ describe("P24Base – capturePayment", () => {
     );
     expect(result.data).toMatchObject({ capture_verified: true });
   });
+
+  it("logs a refused verification as an error", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const provider = new TestP24Provider({ logger });
+    provider["p24Api"].verifyTransaction = vi.fn().mockResolvedValue({
+      responseCode: 1,
+      data: { status: "failed" },
+    });
+
+    await expect(
+      provider.capturePayment({
+        data: {
+          session_id: "payses_SYNTHETICSESSION0000000002",
+          amount: 220,
+          currency: "PLN",
+          order_id: 123456789,
+        },
+      } as any),
+    ).rejects.toThrow("Verification failed");
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Error capturing payment payses_SYNTHETICSESSION0000000002",
+      ),
+    );
+  });
 });
 
 describe("P24Base – findMedusaPaymentSessionId", () => {

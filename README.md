@@ -279,7 +279,7 @@ window.location.href = paymentSession.data.redirect_url;
 3. `POST /store/payments/blik/charge` → P24 `chargeByCode`
 4. Customer approves in banking app
 5. Storefront polls `POST /store/carts/{id}/complete` until order is created
-6. P24 sends webhook to `urlStatus` → verify + capture → `payment_collection.completed_at`
+6. P24 sends webhook to `urlStatus` → capture, which verifies with P24 → `payment_collection.completed_at`
 
 BLIK does not use redirect URLs.
 
@@ -293,7 +293,7 @@ BLIK does not use redirect URLs.
 4. `POST /store/payments/card/charge` with `ref_id` → `transaction/register` + returns `chargeScriptUrl`
 5. Browser runs `Przelewy24CardWhileLabelHandler` (3DS in merchant UI)
 6. Storefront polls `POST /store/carts/{id}/complete` until order is created
-7. P24 webhook → verify + capture
+7. P24 webhook → capture, which verifies with P24
 
 See [P24 Card 2.0 docs](https://developers.przelewy24.pl/extended/index.php?pl#tag/Inicjalizacja-formularza).
 
@@ -345,7 +345,9 @@ With `payment-module` config `id: "przelewy24"` (recommended):
 
 Medusa route: `POST /hooks/payment/:provider` → `getWebhookActionAndData` → `processPaymentWorkflow`.
 
-A notification whose paid `amount` differs from the registered `originAmount` is not verified with P24 and returns `FAILED` (logged with both amounts). The customer keeps the money, because P24 does not settle unverified transactions.
+The webhook does not verify the transaction with P24. Verifying settles the money with the merchant, so it happens only in `capturePayment`, which `processPaymentWorkflow` reaches once Medusa can record the payment. A notification for a payment session that was replaced or re-registered in the meantime therefore stays unverified, and P24 does not settle it.
+
+A notification whose paid `amount` differs from the registered `originAmount` returns `FAILED` (logged with both amounts), so it is never captured. The customer keeps the money, because P24 does not settle unverified transactions.
 
 BLIK transactions additionally register:
 

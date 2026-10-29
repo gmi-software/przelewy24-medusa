@@ -41,10 +41,7 @@ import {
 } from "../../../utils/p24-payment-methods";
 import { createP24Logger, redactUnknown } from "../../../utils/p24-logger";
 import { buildLocalizedP24ErrorMessage } from "../../../utils/p24-errors";
-import {
-  getJobErrorMessage,
-  isExpectedStalePaymentJobFailure,
-} from "../../../utils/payment-job-errors";
+import { getJobErrorMessage } from "../../../utils/payment-job-errors";
 
 import {
   InitiatePaymentInput,
@@ -553,17 +550,11 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         ),
       };
     } catch (error) {
-      const message = getJobErrorMessage(error);
-
-      if (isExpectedStalePaymentJobFailure(error)) {
-        this.logger_.debug(
-          `Skipping stale payment capture for ${sessionId}: ${message}`,
-        );
-      } else {
-        this.logger_.error(
-          `Error capturing payment ${sessionId}: ${message}`,
-        );
-      }
+      // Capture is the only place a transaction gets verified, so a failure
+      // here leaves a paid transaction unsettled.
+      this.logger_.error(
+        `Error capturing payment ${sessionId}: ${getJobErrorMessage(error)}`,
+      );
 
       throw error;
     }

@@ -144,7 +144,7 @@ describe("processP24Webhook", () => {
     const result = await processP24Webhook(deps, webhookData);
 
     expect(result.action).toBe(PaymentActions.NOT_SUPPORTED);
-    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
+    expect(deps.p24Api.getTransactionBySessionId).not.toHaveBeenCalled();
   });
 
   it("leaves the transaction unverified when the paid amount differs from the registered one", async () => {
@@ -160,7 +160,7 @@ describe("processP24Webhook", () => {
       session_id: "payses_medusa_1",
       amount: 50.91,
     });
-    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
+    expect(deps.p24Api.getTransactionBySessionId).not.toHaveBeenCalled();
     expect(deps.logger.error).toHaveBeenCalledWith(
       expect.stringContaining("paid 5091, registered 4999"),
     );

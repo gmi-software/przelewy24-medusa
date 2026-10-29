@@ -160,7 +160,7 @@ async function findAwaitingBlikSession(
 /**
  * Marks the BLIK session as failed when P24 reports a rejected charge, so the
  * storefront stops waiting for a webhook that `urlStatus` never sends on
- * failure. Success stays with `urlStatus` → verify → capture.
+ * failure. Success stays with `urlStatus` → capture, which verifies.
  *
  * Only the session's current registration is touched: a notification for a
  * superseded P24 session id, a session that already settled, or a transaction
