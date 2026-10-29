@@ -200,6 +200,28 @@ describe("P24Base – registration", () => {
 
     expect(result.data?.charge_submitted_at).toBe("2026-10-12T08:45:22.000Z");
   });
+
+  it("updatePayment refuses to re-register a session Medusa already recorded as paid", async () => {
+    const provider = new TestP24Provider();
+    const register = vi.fn();
+    provider["p24Api"].registerTransaction = register;
+
+    await expect(
+      provider.updatePayment({
+        amount: 20,
+        currency_code: "PLN",
+        context: {},
+        data: {
+          session_id: "payses_SYNTHETICSESSION0000000001",
+          token: "tok",
+          amount: 10,
+          p24_status: 1,
+          order_id: 123456789,
+        },
+      } as any),
+    ).rejects.toThrow("Cannot re-register a paid P24 payment session");
+    expect(register).not.toHaveBeenCalled();
+  });
 });
 
 describe("P24Base – authorizePayment", () => {

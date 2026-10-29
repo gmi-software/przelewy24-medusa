@@ -688,6 +688,15 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       return { data: normalizeP24SessionData(data) };
     }
 
+    // `p24_status` is set only by authorizePayment: Medusa recorded a payment
+    // for this registration, and capture verifies that one, never a newer one.
+    if (data?.p24_status != null) {
+      throw this.buildError(
+        "Cannot re-register a paid P24 payment session",
+        new Error(`P24 status ${data.p24_status}`),
+      );
+    }
+
     const baseSessionId =
       (context?.idempotency_key as string | undefined) || getSessionId(data);
 
