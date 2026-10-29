@@ -144,24 +144,7 @@ describe("processP24Webhook", () => {
     const result = await processP24Webhook(deps, webhookData);
 
     expect(result.action).toBe(PaymentActions.NOT_SUPPORTED);
-    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
-  });
-
-  it("returns failed action with Medusa session id when verification fails", async () => {
-    const deps = createDeps({
-      verifyTransaction: vi.fn().mockResolvedValue({
-        responseCode: 1,
-        data: { status: "failed" },
-      }),
-    });
-
-    const result = await processP24Webhook(deps, webhookData);
-
-    expect(result.action).toBe(PaymentActions.FAILED);
-    expect(result.data).toMatchObject({
-      session_id: "payses_medusa_1",
-      amount: 49.99,
-    });
+    expect(deps.p24Api.getTransactionBySessionId).not.toHaveBeenCalled();
   });
 
   it("leaves the transaction unverified when the paid amount differs from the registered one", async () => {
@@ -177,13 +160,13 @@ describe("processP24Webhook", () => {
       session_id: "payses_medusa_1",
       amount: 50.91,
     });
-    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
+    expect(deps.p24Api.getTransactionBySessionId).not.toHaveBeenCalled();
     expect(deps.logger.error).toHaveBeenCalledWith(
       expect.stringContaining("paid 5091, registered 4999"),
     );
   });
 
-  it("returns successful action for verified authorized payments", async () => {
+  it("reports a paid transaction without verifying it, leaving settlement to capture", async () => {
     const deps = createDeps();
 
     const result = await processP24Webhook(deps, webhookData);
@@ -194,11 +177,6 @@ describe("processP24Webhook", () => {
       order_id: 42,
       paymentMethod: 64,
     });
-    expect(deps.p24Api.verifyTransaction).toHaveBeenCalledWith(
-      "p24-session-1",
-      4999,
-      "PLN",
-      42,
-    );
+    expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
   });
 });

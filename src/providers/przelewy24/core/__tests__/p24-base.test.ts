@@ -172,7 +172,7 @@ describe("P24Base – registration", () => {
       currency_code: "PLN",
       context: {},
       data: {
-        session_id: "payses_01M4QDQ4B1SH678JHJJC5SGCV1",
+        session_id: "payses_SYNTHETICSESSION0000000001",
         token: "burned-token",
         amount: 10,
         charge_submitted_at: "2026-10-12T08:45:22.000Z",
@@ -191,7 +191,7 @@ describe("P24Base – registration", () => {
       currency_code: "PLN",
       context: {},
       data: {
-        session_id: "payses_01M4QDQ4B1SH678JHJJC5SGCV1",
+        session_id: "payses_SYNTHETICSESSION0000000001",
         token: "tok",
         amount: 10,
         charge_submitted_at: "2026-10-12T08:45:22.000Z",
@@ -199,6 +199,28 @@ describe("P24Base – registration", () => {
     } as any);
 
     expect(result.data?.charge_submitted_at).toBe("2026-10-12T08:45:22.000Z");
+  });
+
+  it("updatePayment refuses to re-register a session Medusa already recorded as paid", async () => {
+    const provider = new TestP24Provider();
+    const register = vi.fn();
+    provider["p24Api"].registerTransaction = register;
+
+    await expect(
+      provider.updatePayment({
+        amount: 20,
+        currency_code: "PLN",
+        context: {},
+        data: {
+          session_id: "payses_SYNTHETICSESSION0000000001",
+          token: "tok",
+          amount: 10,
+          p24_status: 1,
+          order_id: 123456789,
+        },
+      } as any),
+    ).rejects.toThrow("Cannot re-register a paid P24 payment session");
+    expect(register).not.toHaveBeenCalled();
   });
 });
 
@@ -208,8 +230,8 @@ describe("P24Base – authorizePayment", () => {
       responseCode: 0,
       data: {
         status: 1,
-        orderId: 4303331656,
-        sessionId: "payses_01M487PKK2DV992DQPQW8Z7ZDW",
+        orderId: 123456789,
+        sessionId: "payses_SYNTHETICSESSION0000000002",
         amount: paidGrosze,
         currency: "PLN",
       },
@@ -217,7 +239,7 @@ describe("P24Base – authorizePayment", () => {
 
     return provider.authorizePayment({
       data: {
-        session_id: "payses_01M487PKK2DV992DQPQW8Z7ZDW",
+        session_id: "payses_SYNTHETICSESSION0000000002",
         amount: 220,
         amount_grosze: 22000,
         currency_code: "pln",
@@ -239,15 +261,68 @@ describe("P24Base – authorizePayment", () => {
   });
 });
 
+describe("P24Base – capturePayment", () => {
+  it("settles the transaction by verifying it with P24", async () => {
+    const provider = new TestP24Provider();
+    const verify = vi.fn().mockResolvedValue({
+      responseCode: 0,
+      data: { status: "success" },
+    });
+    provider["p24Api"].verifyTransaction = verify;
+
+    const result = await provider.capturePayment({
+      data: {
+        session_id: "payses_SYNTHETICSESSION0000000002",
+        amount: 220,
+        currency: "PLN",
+        order_id: 123456789,
+      },
+    } as any);
+
+    expect(verify).toHaveBeenCalledWith(
+      "payses_SYNTHETICSESSION0000000002",
+      22000,
+      "PLN",
+      123456789,
+    );
+    expect(result.data).toMatchObject({ capture_verified: true });
+  });
+
+  it("logs a refused verification as an error", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const provider = new TestP24Provider({ logger });
+    provider["p24Api"].verifyTransaction = vi.fn().mockResolvedValue({
+      responseCode: 1,
+      data: { status: "failed" },
+    });
+
+    await expect(
+      provider.capturePayment({
+        data: {
+          session_id: "payses_SYNTHETICSESSION0000000002",
+          amount: 220,
+          currency: "PLN",
+          order_id: 123456789,
+        },
+      } as any),
+    ).rejects.toThrow("Verification failed");
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Error capturing payment payses_SYNTHETICSESSION0000000002",
+      ),
+    );
+  });
+});
+
 describe("P24Base – findMedusaPaymentSessionId", () => {
   it("returns payses id without touching container query", async () => {
     const provider = new TestP24ProviderWithThrowingQuery();
 
     await expect(
       provider["findMedusaPaymentSessionId"](
-        "payses_01KVA2PDHS1FRFK30KJMGSMJE7",
+        "payses_SYNTHETICSESSION0000000003",
       ),
-    ).resolves.toBe("payses_01KVA2PDHS1FRFK30KJMGSMJE7");
+    ).resolves.toBe("payses_SYNTHETICSESSION0000000003");
   });
 
   it("falls back to raw session id when query is unavailable", async () => {

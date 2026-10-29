@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.8
+
+### Changed
+- The payment webhook no longer verifies transactions with P24. Verifying settles the money with the merchant, so it is left to `capturePayment`, which `processPaymentWorkflow` reaches only for a payment Medusa can record. Before, a notification for a payment session replaced or re-registered in the meantime was verified, and the customer was charged with no payment recorded in Medusa. The webhook still reports `SUCCESSFUL` for a paid transaction (P24 status 1 or 2). It no longer returns `FAILED` for a refused verification: `capturePayment` now throws instead
+- `capturePayment` logs every failure, including a refused verification, as an error. Before, a refused verification was logged only at debug level
+- `updatePayment` refuses to re-register a session that `authorizePayment` already accepted as paid (its data carries `p24_status`) when the amount changes. Medusa's payment keeps the original registration, which capture verifies, so a new registration would be paid by the customer but never settled
+
 ## 0.1.7
 
 ### Changed

@@ -41,10 +41,7 @@ import {
 } from "../../../utils/p24-payment-methods";
 import { createP24Logger, redactUnknown } from "../../../utils/p24-logger";
 import { buildLocalizedP24ErrorMessage } from "../../../utils/p24-errors";
-import {
-  getJobErrorMessage,
-  isExpectedStalePaymentJobFailure,
-} from "../../../utils/payment-job-errors";
+import { getJobErrorMessage } from "../../../utils/payment-job-errors";
 
 import {
   InitiatePaymentInput,
@@ -553,17 +550,11 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         ),
       };
     } catch (error) {
-      const message = getJobErrorMessage(error);
-
-      if (isExpectedStalePaymentJobFailure(error)) {
-        this.logger_.debug(
-          `Skipping stale payment capture for ${sessionId}: ${message}`,
-        );
-      } else {
-        this.logger_.error(
-          `Error capturing payment ${sessionId}: ${message}`,
-        );
-      }
+      // Capture is the only place a transaction gets verified, so a failure
+      // here leaves a paid transaction unsettled.
+      this.logger_.error(
+        `Error capturing payment ${sessionId}: ${getJobErrorMessage(error)}`,
+      );
 
       throw error;
     }
@@ -695,6 +686,15 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
 
     if (Number.isFinite(currentAmount) && currentAmount === amountNumeric) {
       return { data: normalizeP24SessionData(data) };
+    }
+
+    // `p24_status` is set only by authorizePayment: Medusa recorded a payment
+    // for this registration, and capture verifies that one, never a newer one.
+    if (data?.p24_status != null) {
+      throw this.buildError(
+        "Cannot re-register a paid P24 payment session",
+        new Error(`P24 status ${data.p24_status}`),
+      );
     }
 
     const baseSessionId =

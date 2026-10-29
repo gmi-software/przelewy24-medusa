@@ -111,29 +111,9 @@ export async function processP24Webhook(
       };
     }
 
-    const verification = await deps.p24Api.verifyTransaction(
-      sessionId,
-      amount,
-      currency,
-      orderId,
-    );
-
-    if (
-      verification.responseCode !== 0 ||
-      verification.data.status !== "success"
-    ) {
-      deps.logger.error(
-        `Transaction verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`,
-      );
-      return {
-        action: PaymentActions.FAILED,
-        data: {
-          session_id: medusaPaymentSessionId,
-          amount: amountNormal,
-        },
-      };
-    }
-
+    // No verification here: verifying settles the money, so it is left to
+    // capturePayment, which Medusa reaches only for a payment it can record.
+    // A notification for a replaced or re-registered session stays unverified.
     const { medusaStatus } = await fetchTransactionDetailsAndStatus(
       deps,
       sessionId,
