@@ -110,6 +110,15 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     if (!isDefined(options.backend_url)) {
       throw new Error("Required option `backend_url` is missing in P24 plugin");
     }
+    const timeLimit = options.redirect_time_limit_minutes;
+    if (
+      timeLimit != null &&
+      (!Number.isInteger(timeLimit) || timeLimit < 0 || timeLimit > 99)
+    ) {
+      throw new Error(
+        "Option `redirect_time_limit_minutes` must be an integer from 0 to 99",
+      );
+    }
   }
 
   protected constructor(cradle: P24Container, options: P24Options) {
@@ -203,6 +212,9 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       email: customerEmail,
       channel: normalizedParams.channel,
       method: normalizedParams.method,
+      ...(this.getTransactionTimeLimit()
+        ? { timeLimit: this.getTransactionTimeLimit() }
+        : {}),
       urlReturn,
       urlStatus: `${this.options_.backend_url}/hooks/payment/${this.getProviderKey()}_przelewy24`,
       ...(cardPaymentNotificationUrl
@@ -230,6 +242,16 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
 
     return transactionRequest;
+  }
+
+  /**
+   * P24 `timeLimit` for this provider's registrations. Only the hosted
+   * redirect and Visa Mobile opt in: past the limit the transaction can no
+   * longer be paid, so status 0 is final and an abandoned link cannot be
+   * paid next to a newer attempt. BLIK and cards settle in the page.
+   */
+  protected getTransactionTimeLimit(): number | undefined {
+    return undefined;
   }
 
   /** `urlCardPaymentNotification` sent on register; providers opt in. */
@@ -410,6 +432,12 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
             : {}),
           white_label: isWhiteLabel,
           ...(isWhiteLabel ? {} : { redirect_url: redirectUrl }),
+          ...(transactionRequest.timeLimit
+            ? {
+                time_limit_minutes: transactionRequest.timeLimit,
+                registered_at: new Date().toISOString(),
+              }
+            : {}),
           responseCode: sessionData.responseCode,
         }),
       );

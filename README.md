@@ -97,6 +97,9 @@ module.exports = defineConfig({
 | `frontend_url`          | Frontend URL for customer redirects                      | Yes      | -                       |
 | `backend_url`           | Backend URL for webhook notifications                    | Yes      | -                       |
 | `request_timeout_ms`    | Timeout for each P24 API request, in milliseconds        | No       | `20000`                 |
+| `redirect_time_limit_minutes` | Minutes (1–99) a hosted redirect / Visa Mobile transaction stays payable (P24 `timeLimit`); BLIK and cards are not limited | No | unset (no limit) |
+
+`redirect_time_limit_minutes` (sandbox, 2026-11-02): the countdown starts when the customer first opens the P24 payment page, not at registration, and reopening the link does not reset it. Once it runs out the link shows "Przekroczony czas na dokonanie transakcji" and cannot be paid. `transaction/by/sessionId` still answers "Transaction not found" for it; there is no expired status. The traditional bank transfer stays on offer; whether P24 accepts one booked after the limit is unconfirmed, so check with P24 before enabling it in production.
 
 ### Environment Variables
 

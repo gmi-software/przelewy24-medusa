@@ -85,6 +85,10 @@ export class P24ApiService {
       requestData.method = data.method;
     }
 
+    if (data.timeLimit != null && data.timeLimit > 0) {
+      requestData.timeLimit = data.timeLimit;
+    }
+
     if (data.regulationAccept === true) {
       requestData.regulationAccept = true;
     }
