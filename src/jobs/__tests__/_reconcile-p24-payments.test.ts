@@ -103,12 +103,27 @@ const setupPages = (
       filters,
       pagination,
     }: {
-      filters: { $or?: [unknown, { id: { $gt: string } }] };
-      pagination: { take: number };
+      filters: {
+        id?: string[];
+        $or?: [
+          { updated_at: { $gt: string } },
+          { updated_at: string; id: { $gt: string } },
+        ];
+      };
+      pagination?: { take: number };
     }) => {
-      const afterId = filters.$or?.[1].id.$gt;
-      const start = afterId ? rows.findIndex((row) => row.id === afterId) + 1 : 0;
-      return { data: rows.slice(start, start + pagination.take) };
+      if (Array.isArray(filters.id)) {
+        return { data: rows.filter((row) => filters.id!.includes(row.id)) };
+      }
+      const keyset = filters.$or;
+      const after = keyset
+        ? rows.filter(
+            (row) =>
+              row.updated_at > keyset[0].updated_at.$gt ||
+              (row.updated_at === keyset[1].updated_at && row.id > keyset[1].id.$gt),
+          )
+        : rows;
+      return { data: after.slice(0, pagination?.take ?? after.length) };
     },
   );
   const store = new Map<string, unknown>();
@@ -223,7 +238,7 @@ describe("reconcileP24PaymentsJob paging", () => {
     );
     expect(caching.set).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        data: { updated_at: rows[999].updated_at, id: rows[999].id },
+        data: { cursor: { updated_at: rows[999].updated_at, id: rows[999].id }, retry: [] },
       }),
     );
 
@@ -232,7 +247,9 @@ describe("reconcileP24PaymentsJob paging", () => {
 
     expect(graph.mock.calls[0][0].filters.$or[1].id.$gt).toBe(rows[999].id);
     expect(graph).toHaveBeenCalledTimes(6);
-    expect(caching.set).toHaveBeenLastCalledWith(expect.objectContaining({ data: null }));
+    expect(caching.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { cursor: null, retry: [] } }),
+    );
 
     graph.mockClear();
     await reconcileP24PaymentsJob(container as any);
@@ -251,6 +268,69 @@ describe("reconcileP24PaymentsJob paging", () => {
 
     const served = (await graph.mock.results[0].value).data as { id: string }[];
     expect(served[0].id).toBe(rows[999].id);
+  });
+
+  it("continues at the following row when the saved cursor row is deleted", async () => {
+    const { container, graph, rows } = setupPages(Array.from({ length: 21 }, capturedPage));
+
+    await reconcileP24PaymentsJob(container as any);
+    const following = rows[1000];
+    rows.splice(999, 1);
+    graph.mockClear();
+    await reconcileP24PaymentsJob(container as any);
+
+    const served = (await graph.mock.results[0].value).data as { id: string }[];
+    expect(served[0].id).toBe(following.id);
+  });
+
+  it("reads a session whose processing failed again next run, past the cursor", async () => {
+    const pages = Array.from({ length: 21 }, capturedPage);
+    pages[0][3] = candidate({ id: "payses_flaky" });
+    const { container, caching, rows } = setupPages(pages);
+    run.mockRejectedValueOnce(new Error("database went away"));
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(caching.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: {
+          cursor: { updated_at: rows[999].updated_at, id: rows[999].id },
+          retry: ["payses_flaky"],
+        },
+      }),
+    );
+
+    run.mockClear();
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0][0].input.data.session_id).toBe("payses_flaky");
+    expect(caching.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { cursor: null, retry: [] } }),
+    );
+  });
+
+  it("saves the cursor only after every session read was processed", async () => {
+    const pages = Array.from({ length: 21 }, capturedPage);
+    pages[0][0] = candidate({ id: "payses_paid" });
+    const { container, caching } = setupPages(pages);
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(run.mock.invocationCallOrder[0]).toBeLessThan(
+      caching.set.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("reads a state saved by the previous version as a bare cursor", async () => {
+    const { container, graph, caching, rows } = setupPages(
+      Array.from({ length: 21 }, capturedPage),
+    );
+    caching.get.mockResolvedValueOnce({ updated_at: rows[999].updated_at, id: rows[999].id });
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(graph.mock.calls[0][0].filters.$or).toBeUndefined();
   });
 
   it("keeps the cursor in memory when no cache module is registered", async () => {

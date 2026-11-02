@@ -28,12 +28,24 @@ const RECONCILE_CURSOR_KEY = 'p24-reconcile:cursor'
  */
 export type ReconcileCursor = { updated_at: string; id: string }
 
+/**
+ * What the next run needs: where the sweep stopped, and the sessions whose
+ * processing failed, which are read again first. Saved only after a run has
+ * processed what it read, so a crash repeats the run instead of skipping it.
+ */
+export type ReconcileState = { cursor: ReconcileCursor | null; retry: string[] }
+
+/** A failure storm must not turn the retry pass into a second sweep. */
+const RECONCILE_MAX_RETRIES = RECONCILE_PAGE_SIZE * 4
+
+const EMPTY_STATE: ReconcileState = { cursor: null, retry: [] }
+
 // Fallback when no cache module is registered; lost on restart.
-let memoryCursor: ReconcileCursor | null = null
+let memoryState: ReconcileState = EMPTY_STATE
 
 type CursorStore = {
-  get: () => Promise<ReconcileCursor | null>
-  set: (cursor: ReconcileCursor | null) => Promise<void>
+  get: () => Promise<unknown>
+  set: (state: ReconcileState) => Promise<void>
 }
 
 const resolveOptional = <T extends { get: unknown; set: unknown }>(
@@ -66,10 +78,9 @@ export const resolveCursorStore = (
   }>(container, Modules.CACHING)
   if (caching) {
     return {
-      get: async () =>
-        ((await caching.get({ key: RECONCILE_CURSOR_KEY })) as ReconcileCursor | null) ?? null,
-      set: (cursor) =>
-        caching.set({ key: RECONCILE_CURSOR_KEY, data: cursor, ttl }),
+      get: () => caching.get({ key: RECONCILE_CURSOR_KEY }),
+      set: (state) =>
+        caching.set({ key: RECONCILE_CURSOR_KEY, data: state, ttl }),
     }
   }
 
@@ -79,37 +90,49 @@ export const resolveCursorStore = (
   }>(container, Modules.CACHE)
   if (cache) {
     return {
-      get: async () =>
-        ((await cache.get(RECONCILE_CURSOR_KEY)) as ReconcileCursor | null) ?? null,
-      set: (cursor) => cache.set(RECONCILE_CURSOR_KEY, cursor, ttl),
+      get: () => cache.get(RECONCILE_CURSOR_KEY),
+      set: (state) => cache.set(RECONCILE_CURSOR_KEY, state, ttl),
     }
   }
 
   return {
-    get: async () => memoryCursor,
-    set: async (cursor) => {
-      memoryCursor = cursor
+    get: async () => memoryState,
+    set: async (state) => {
+      memoryState = state
     },
   }
 }
 
-const readCursor = async (store: CursorStore, logger: { warn: (m: string) => void }) => {
-  try {
-    const cursor = await store.get()
-    return cursor?.updated_at && cursor?.id ? cursor : null
-  } catch (error) {
-    logger.warn(`[p24-reconcile] Could not read the sweep cursor; starting from the oldest session: ${getJobErrorMessage(error)}`)
-    return null
+const isCursor = (value: unknown): value is ReconcileCursor =>
+  typeof (value as ReconcileCursor | null)?.updated_at === 'string' &&
+  typeof (value as ReconcileCursor | null)?.id === 'string'
+
+export const parseReconcileState = (value: unknown): ReconcileState => {
+  const state = value as Partial<ReconcileState> | null
+  return {
+    cursor: isCursor(state?.cursor) ? state!.cursor! : null,
+    retry: Array.isArray(state?.retry)
+      ? state!.retry!.filter((id): id is string => typeof id === 'string')
+      : [],
   }
 }
 
-const writeCursor = async (
+const readState = async (store: CursorStore, logger: { warn: (m: string) => void }) => {
+  try {
+    return parseReconcileState(await store.get())
+  } catch (error) {
+    logger.warn(`[p24-reconcile] Could not read the sweep cursor; starting from the oldest session: ${getJobErrorMessage(error)}`)
+    return EMPTY_STATE
+  }
+}
+
+const writeState = async (
   store: CursorStore,
-  cursor: ReconcileCursor | null,
+  state: ReconcileState,
   logger: { warn: (m: string) => void },
 ) => {
   try {
-    await store.set(cursor)
+    await store.set(state)
   } catch (error) {
     logger.warn(`[p24-reconcile] Could not save the sweep cursor: ${getJobErrorMessage(error)}`)
   }
@@ -182,34 +205,51 @@ export default async function reconcileP24PaymentsJob(
   // mid-run cannot shift a later one out of reach.
   const paymentSessions: ReconcileCandidate[] = []
   const cursorStore = resolveCursorStore(container)
-  const startCursor = await readCursor(cursorStore, logger)
-  let cursor = startCursor
+  const startState = await readState(cursorStore, logger)
+  let cursor = startState.cursor
   let capped = false
+
+  const candidateFields = [
+    'id',
+    'status',
+    'provider_id',
+    'data',
+    'amount',
+    'updated_at',
+    'deleted_at',
+    'payment_collection.payments.id',
+    'payment_collection.payments.payment_session_id',
+    'payment_collection.payments.captured_at',
+    'payment_collection.payments.canceled_at',
+  ]
+  const windowFilters = {
+    provider_id: { $like: `${P24_PROVIDER_PREFIX}%` },
+    status: { $in: [...RECONCILEABLE_STATUSES] },
+    deleted_at: null,
+    updated_at: {
+      $lte: cutoff.toISOString(),
+      $gte: maxAge.toISOString(),
+    },
+  }
+
+  // Sessions a previous run failed to process: read first, whatever the
+  // cursor, for as long as they stay in the window.
+  if (startState.retry.length) {
+    const { data } = await query.graph({
+      entity: 'payment_session',
+      fields: candidateFields,
+      filters: { ...windowFilters, id: startState.retry },
+    })
+    paymentSessions.push(...((data ?? []) as ReconcileCandidate[]))
+  }
+  const retried = new Set(paymentSessions.map((session) => session.id))
 
   for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
     const { data } = await query.graph({
       entity: 'payment_session',
-      fields: [
-        'id',
-        'status',
-        'provider_id',
-        'data',
-        'amount',
-        'updated_at',
-        'deleted_at',
-        'payment_collection.payments.id',
-        'payment_collection.payments.payment_session_id',
-        'payment_collection.payments.captured_at',
-        'payment_collection.payments.canceled_at',
-      ],
+      fields: candidateFields,
       filters: {
-        provider_id: { $like: `${P24_PROVIDER_PREFIX}%` },
-        status: { $in: [...RECONCILEABLE_STATUSES] },
-        deleted_at: null,
-        updated_at: {
-          $lte: cutoff.toISOString(),
-          $gte: maxAge.toISOString(),
-        },
+        ...windowFilters,
         ...afterCursor(cursor),
       },
       pagination: {
@@ -222,7 +262,7 @@ export default async function reconcileP24PaymentsJob(
     })
 
     const rows = (data ?? []) as (ReconcileCandidate & { updated_at?: unknown })[]
-    paymentSessions.push(...rows)
+    paymentSessions.push(...rows.filter((row) => !retried.has(row.id)))
 
     if (rows.length < RECONCILE_PAGE_SIZE) {
       break
@@ -239,13 +279,8 @@ export default async function reconcileP24PaymentsJob(
     }
   }
 
-  // Saved before processing, so a crash mid-run still moves the sweep on;
-  // a sweep that reached the end starts from the oldest session next time.
-  if (capped || startCursor) {
-    await writeCursor(cursorStore, capped ? cursor : null, logger)
-  }
-
   let reconciled = 0
+  const failed: string[] = []
 
   for (const session of paymentSessions) {
     const sessionData = (session.data ?? {}) as Record<string, unknown>
@@ -332,10 +367,32 @@ export default async function reconcileP24PaymentsJob(
         continue
       }
 
+      failed.push(session.id)
       logger.error(
         `[p24-reconcile] Failed to reconcile payment session ${session.id}: ${message}`,
       )
     }
+  }
+
+  // Only now, with everything read also processed: a crash before this line
+  // repeats the run, and a failed session is read again next run. A sweep
+  // that reached the end starts from the oldest session next time.
+  if (failed.length > RECONCILE_MAX_RETRIES) {
+    logger.warn(
+      `[p24-reconcile] ${failed.length} sessions failed; retrying the first ${RECONCILE_MAX_RETRIES}, the rest when the sweep comes round again`,
+    )
+  }
+  const nextState: ReconcileState = {
+    cursor: capped ? cursor : null,
+    retry: failed.slice(0, RECONCILE_MAX_RETRIES),
+  }
+  if (
+    nextState.cursor !== null ||
+    nextState.retry.length ||
+    startState.cursor !== null ||
+    startState.retry.length
+  ) {
+    await writeState(cursorStore, nextState, logger)
   }
 
   if (reconciled > 0) {
