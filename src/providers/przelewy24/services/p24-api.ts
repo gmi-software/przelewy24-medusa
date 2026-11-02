@@ -18,20 +18,29 @@ import {
   P24WebhookPayload,
 } from "../types";
 import { coerceSandbox } from "../../../utils/coerce-sandbox";
-import { P24ApiError } from "../../../utils/p24-api-error";
+import { P24ApiError, P24RequestError } from "../../../utils/p24-api-error";
 import { isAllowedP24WebhookSourceIp } from "../../../utils/p24-webhook-ips";
 
-export { P24ApiError };
+export { P24ApiError, P24RequestError };
+
+/** Without a signal, fetch waits for the OS socket timeout (minutes). */
+export const DEFAULT_P24_REQUEST_TIMEOUT_MS = 20_000;
 
 export class P24ApiService {
   private readonly options: P24Options;
   private readonly baseURL: string;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: P24Options) {
     this.options = {
       ...options,
       sandbox: coerceSandbox(options.sandbox),
     };
+    const timeoutMs = Number(options.request_timeout_ms);
+    this.requestTimeoutMs =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? timeoutMs
+        : DEFAULT_P24_REQUEST_TIMEOUT_MS;
     this.baseURL = this.options.sandbox
       ? "https://sandbox.przelewy24.pl/api/v1"
       : "https://secure.przelewy24.pl/api/v1";
@@ -208,16 +217,28 @@ export class P24ApiService {
       `${this.options.pos_id}:${this.options.api_key}`,
     ).toString("base64");
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Basic ${credentials}`,
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    let response: Response;
+    let responseText: string;
 
-    const responseText = await response.text();
+    try {
+      response = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${credentials}`,
+        },
+        body: data ? JSON.stringify(data) : undefined,
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+      responseText = await response.text();
+    } catch (error) {
+      throw new P24RequestError({
+        method,
+        endpoint,
+        timeoutMs: this.requestTimeoutMs,
+        cause: error,
+      });
+    }
 
     if (!response.ok) {
       throw new P24ApiError({

@@ -12,6 +12,8 @@ export interface P24Options {
   frontend_url: string;
   backend_url: string;
   debug?: boolean;
+  /** Per-request timeout for P24 API calls, in ms. Default 20000. */
+  request_timeout_ms?: number;
 }
 
 export interface P24ServiceOptions extends P24Options {

@@ -7,6 +7,7 @@ import {
 } from "@medusajs/types";
 import {
   AbstractPaymentProvider,
+  BigNumber,
   ContainerRegistrationKeys,
   isDefined,
 } from "@medusajs/framework/utils";
@@ -41,6 +42,7 @@ import {
 } from "../../../utils/p24-payment-methods";
 import { createP24Logger, redactUnknown } from "../../../utils/p24-logger";
 import { buildLocalizedP24ErrorMessage } from "../../../utils/p24-errors";
+import { isP24UnknownOutcomeError } from "../../../utils/p24-api-error";
 import { getJobErrorMessage } from "../../../utils/payment-job-errors";
 
 import {
@@ -68,6 +70,9 @@ type P24Container = Record<string, unknown> & {
   logger?: Logger;
 };
 
+/** P24 `status` of a transaction this merchant has verified. */
+const P24_VERIFIED_STATUS = 2;
+
 type PaymentSessionQuery = {
   graph: (config: {
     entity: string;
@@ -81,6 +86,8 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
   protected readonly p24Api: P24ApiService;
   protected readonly container_: P24Container;
   protected readonly logger_: ReturnType<typeof createP24Logger>;
+  /** Pauses before each retry of a verify that got no answer or a 5xx. */
+  protected verifyRetryDelaysMs_: number[] = [500, 1500];
 
   static validateOptions(options: P24Options): void {
     if (!isDefined(options.merchant_id)) {
@@ -519,22 +526,14 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
 
     try {
-      const verification = await this.p24Api.verifyTransaction(
-        sessionId,
-        getSmallestUnit(amount, currency),
-        currency,
-        orderId,
-      );
-
-      if (
-        verification.responseCode !== 0 ||
-        verification.data.status !== "success"
-      ) {
-        throw this.buildError(
-          "Payment capture failed",
-          new Error(
-            `Verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`,
-          ),
+      // A verify whose answer we lost may have settled the transaction, and
+      // what P24 returns for verifying it again is undocumented.
+      if (!(await this.isTransactionVerified(sessionId))) {
+        await this.verifyTransactionWithRetry(
+          sessionId,
+          getSmallestUnit(amount, currency),
+          currency,
+          orderId,
         );
       }
 
@@ -557,6 +556,70 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       );
 
       throw error;
+    }
+  }
+
+  private async verifyTransactionWithRetry(
+    sessionId: string,
+    amountGrosze: number,
+    currency: string,
+    orderId: number,
+  ): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      let failure: unknown;
+
+      try {
+        const verification = await this.p24Api.verifyTransaction(
+          sessionId,
+          amountGrosze,
+          currency,
+          orderId,
+        );
+
+        if (
+          verification.responseCode === 0 &&
+          verification.data.status === "success"
+        ) {
+          return;
+        }
+
+        failure = this.buildError(
+          "Payment capture failed",
+          new Error(
+            `Verification failed - responseCode: ${verification.responseCode}, status: ${verification.data.status}`,
+          ),
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      if (await this.isTransactionVerified(sessionId)) {
+        return;
+      }
+
+      const delayMs = this.verifyRetryDelaysMs_[attempt];
+
+      if (!isP24UnknownOutcomeError(failure) || delayMs == null) {
+        throw failure;
+      }
+
+      this.logger_.warn(
+        `Retrying P24 verification of ${sessionId}: ${getJobErrorMessage(failure)}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  /** Best effort: a failed lookup counts as not verified. */
+  private async isTransactionVerified(sessionId: string): Promise<boolean> {
+    try {
+      const { p24Status } = await this.getTransactionDetailsAndStatus(sessionId);
+      return p24Status === P24_VERIFIED_STATUS;
+    } catch (error) {
+      this.logger_.warn(
+        `Could not check P24 status of ${sessionId} around verification: ${getJobErrorMessage(error)}`,
+      );
+      return false;
     }
   }
 
@@ -606,7 +669,9 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
           {
             orderId,
             sessionId,
-            amount: getSmallestUnit(Number(refundAmount), currencyCode),
+            // Medusa passes `refund.raw_amount` ({ value, precision }), which
+            // Number() turns into NaN and P24 receives as null.
+            amount: getSmallestUnit(refundAmount, currencyCode),
             description: `Refund for order ${sessionId}`,
           },
         ],
@@ -651,7 +716,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       return {
         data: normalizeP24SessionData({
           ...paymentData,
-          refund_amount: refundAmount,
+          refund_amount: new BigNumber(refundAmount).numeric,
           refunded_at: new Date().toISOString(),
           refunds_uuid: refundsUuid,
           refund_request_id: requestId,

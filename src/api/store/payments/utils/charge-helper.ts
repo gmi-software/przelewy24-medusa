@@ -7,6 +7,7 @@ import {
 } from "@medusajs/framework/utils";
 import {
   getP24FailureDetails,
+  isP24UnknownOutcomeError,
   P24FailureDetails,
 } from "../../../../utils/p24-api-error";
 import { buildLocalizedP24ErrorMessage } from "../../../../utils/p24-errors";
@@ -241,7 +242,10 @@ export async function handleP24Charge({
       `[p24-charge] ${failure.message} context=${JSON.stringify(context)}`,
     );
 
-    if (paymentSessionId) {
+    // No answer or a 5xx: P24 may have accepted the charge. The session stays
+    // pending with its `charge_submitted_at` reservation, so the status check
+    // or the reconcile job settles it and the token cannot be charged again.
+    if (paymentSessionId && !isP24UnknownOutcomeError(error)) {
       await markPaymentSessionError(
         req,
         paymentSessionId,
@@ -343,6 +347,35 @@ export async function assertBlikChargeMatchesPaymentSession(
   // A P24 BLIK token is single-use: whatever the bank decided for the first
   // chargeByCode, a second one on the same registration cannot succeed.
   if (session.data?.[P24_CHARGE_SUBMITTED_AT_KEY] != null) {
+    throw new Error("Payment session was already charged");
+  }
+
+  return session;
+}
+
+/**
+ * Card counterpart of `assertBlikChargeMatchesPaymentSession`: registering
+ * again under the same P24 sessionId would replace the token of a
+ * registration the customer may already have paid through 3DS.
+ */
+export async function assertCardChargeMatchesPaymentSession(
+  req: MedusaRequest,
+  paymentSessionId: string,
+  expectedProviderId: string,
+): Promise<PaymentSessionDTO> {
+  const paymentModule = req.scope.resolve(Modules.PAYMENT);
+  const session = await paymentModule.retrievePaymentSession(paymentSessionId);
+
+  assertPaymentSessionProvider(session, expectedProviderId);
+
+  if (session.status && !CHARGEABLE_SESSION_STATUSES.has(session.status)) {
+    throw new Error(`Payment session is ${session.status}`);
+  }
+
+  if (
+    session.data?.p24_status != null ||
+    session.data?.[P24_CHARGE_SUBMITTED_AT_KEY] != null
+  ) {
     throw new Error("Payment session was already charged");
   }
 

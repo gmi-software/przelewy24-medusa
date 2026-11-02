@@ -5,6 +5,7 @@ import {
 } from "@medusajs/framework/utils";
 
 import { POST } from "../route";
+import { P24RequestError } from "../../../../../../utils/p24-api-error";
 
 const SESSION_ID = "payses_01M4QDQ4B1SH678JHJJC5SGCV1";
 
@@ -138,6 +139,29 @@ describe("POST /store/payments/blik/charge", () => {
       "update:pending",
       "chargeByCode",
       "update:error",
+      "unlock",
+    ]);
+  });
+
+  it("answers 502 and keeps the session pending when the charge outcome is unknown", async () => {
+    const { req, res, events } = setup({
+      chargeBlikPayment: vi.fn().mockRejectedValue(
+        new P24RequestError({
+          method: "POST",
+          endpoint: "/paymentMethod/blik/chargeByCode",
+          timeoutMs: 20000,
+          cause: new DOMException("timeout", "TimeoutError"),
+        }),
+      ),
+    });
+
+    await POST(req as never, res as never);
+
+    expect(res.status).toHaveBeenCalledWith(502);
+    expect(events).toEqual([
+      `lock:p24-payment-session:${SESSION_ID}`,
+      "update:pending",
+      "chargeByCode",
       "unlock",
     ]);
   });

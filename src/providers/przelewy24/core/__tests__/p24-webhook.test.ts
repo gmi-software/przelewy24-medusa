@@ -3,6 +3,10 @@ import { PaymentActions } from "@medusajs/framework/utils";
 
 import { P24ApiService } from "../../services/p24-api";
 import {
+  P24ApiError,
+  P24RequestError,
+} from "../../../../utils/p24-api-error";
+import {
   extractP24WebhookSourceIp,
   processP24Webhook,
 } from "../p24-webhook";
@@ -178,5 +182,67 @@ describe("processP24Webhook", () => {
       paymentMethod: 64,
     });
     expect(deps.p24Api.verifyTransaction).not.toHaveBeenCalled();
+  });
+
+  it("reports a still-pending transaction as NOT_SUPPORTED so Medusa does not complete the cart", async () => {
+    const deps = createDeps({
+      getTransactionBySessionId: vi.fn().mockResolvedValue({
+        responseCode: 0,
+        data: { status: "0", orderId: 42, amount: 4999, currency: "PLN" },
+      }),
+    });
+
+    const result = await processP24Webhook(deps, webhookData);
+
+    expect(result.action).toBe(PaymentActions.NOT_SUPPORTED);
+    expect(result.data).toMatchObject({ session_id: "payses_medusa_1" });
+  });
+
+  it.each([
+    [
+      "a P24 5xx",
+      new P24ApiError({
+        status: 503,
+        statusText: "Service Unavailable",
+        method: "GET",
+        endpoint: "/transaction/by/sessionId/p24-session-1",
+        responseText: "",
+      }),
+    ],
+    [
+      "a timeout",
+      new P24RequestError({
+        method: "GET",
+        endpoint: "/transaction/by/sessionId/p24-session-1",
+        timeoutMs: 20000,
+        cause: new DOMException("timeout", "TimeoutError"),
+      }),
+    ],
+    ["a database error", new Error("Connection terminated unexpectedly")],
+  ])("rethrows %s so the event bus retries the notification", async (_, error) => {
+    const deps = createDeps({
+      getTransactionBySessionId: vi.fn().mockRejectedValue(error),
+    });
+
+    await expect(processP24Webhook(deps, webhookData)).rejects.toBe(error);
+  });
+
+  it("reports FAILED when P24 definitively refuses the status lookup", async () => {
+    const deps = createDeps({
+      getTransactionBySessionId: vi.fn().mockRejectedValue(
+        new P24ApiError({
+          status: 404,
+          statusText: "Not Found",
+          method: "GET",
+          endpoint: "/transaction/by/sessionId/p24-session-1",
+          responseText: JSON.stringify({ error: "Transaction not found", code: 404 }),
+        }),
+      ),
+    });
+
+    const result = await processP24Webhook(deps, webhookData);
+
+    expect(result.action).toBe(PaymentActions.FAILED);
+    expect(result.data).toMatchObject({ session_id: "p24-session-1", amount: 49.99 });
   });
 });

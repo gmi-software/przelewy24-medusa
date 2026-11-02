@@ -92,6 +92,57 @@ export class P24ApiError extends Error {
   }
 }
 
+/**
+ * Thrown when a Przelewy24 request got no response (timeout, connection
+ * reset, DNS). P24 may still have processed it, so callers must not treat
+ * this as a rejection.
+ */
+export class P24RequestError extends Error {
+  readonly method: string;
+  /** Request path without query string. */
+  readonly endpoint: string;
+  readonly timedOut: boolean;
+
+  constructor(init: {
+    method: string;
+    endpoint: string;
+    timeoutMs: number;
+    cause: unknown;
+  }) {
+    const timedOut =
+      init.cause instanceof Error &&
+      (init.cause.name === "TimeoutError" || init.cause.name === "AbortError");
+    const reason = timedOut
+      ? `timed out after ${init.timeoutMs}ms`
+      : init.cause instanceof Error
+        ? init.cause.message
+        : "network error";
+
+    // No endpoint in the message: it can carry a session id, and stale-job
+    // detection in `payment-job-errors.ts` matches on message text.
+    super(`P24 API request did not complete: ${init.method} ${reason}`, {
+      cause: init.cause,
+    });
+
+    this.name = "P24RequestError";
+    this.method = init.method;
+    this.endpoint = stripQuery(init.endpoint);
+    this.timedOut = timedOut;
+  }
+}
+
+/**
+ * True when P24 may or may not have acted on the request: no response, or a
+ * 5xx. A 4xx or a non-zero `responseCode` is a definitive rejection.
+ */
+export function isP24UnknownOutcomeError(error: unknown): boolean {
+  if (error instanceof P24RequestError) {
+    return true;
+  }
+
+  return error instanceof P24ApiError && error.status >= 500;
+}
+
 export type P24FailureDetails = {
   message: string;
   http_status?: number;
@@ -109,6 +160,10 @@ export function getP24FailureDetails(error: unknown): P24FailureDetails {
       p24_code: error.p24Code,
       p24_description: error.p24Description,
     };
+  }
+
+  if (error instanceof P24RequestError) {
+    return { message: error.message, endpoint: error.endpoint };
   }
 
   return {

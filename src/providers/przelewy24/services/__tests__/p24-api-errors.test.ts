@@ -7,7 +7,9 @@ import {
 } from '../../../../utils/payment-job-errors'
 import {
   getP24UserFacingMessage,
+  isP24UnknownOutcomeError,
   P24_ERROR_BODY_MAX_LENGTH,
+  P24RequestError,
 } from '../../../../utils/p24-api-error'
 
 const TEST_OPTIONS = {
@@ -301,5 +303,68 @@ describe('getP24UserFacingMessage', () => {
       'Session not found',
     )
     expect(getP24UserFacingMessage('boom', 'fallback')).toBe('fallback')
+  })
+})
+
+describe('P24ApiService request timeouts', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('bounds every request with the configured timeout', async () => {
+    const fetchMock = mockFetchResponse(200, 'OK', '{"responseCode":0}')
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+
+    await new P24ApiService({ ...TEST_OPTIONS, request_timeout_ms: 1500 } as never)
+      .getTransactionBySessionId('payses_01ABC')
+
+    expect(timeout).toHaveBeenCalledWith(1500)
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    timeout.mockRestore()
+  })
+
+  it('reports a timed-out charge as an unknown outcome, not a rejection', async () => {
+    const abort = new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort))
+
+    const error = await captureError(
+      new P24ApiService(TEST_OPTIONS as never).chargeBlikByCode({
+        token: BLIK_TOKEN,
+        blikCode: '777123',
+      }),
+    )
+
+    expect(error).toBeInstanceOf(P24RequestError)
+    expect(error).not.toBeInstanceOf(P24ApiError)
+    expect((error as unknown as P24RequestError).timedOut).toBe(true)
+    expect(error.endpoint).toBe('/paymentMethod/blik/chargeByCode')
+    expect(error.message).toBe(
+      'P24 API request did not complete: POST timed out after 20000ms',
+    )
+    expect(isP24UnknownOutcomeError(error)).toBe(true)
+    expect(isExpectedStalePaymentJobFailure(error)).toBe(false)
+  })
+
+  it('reports a dropped connection as an unknown outcome', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
+
+    const error = await captureError(
+      new P24ApiService(TEST_OPTIONS as never).registerTransaction({} as never),
+    )
+
+    expect(error).toBeInstanceOf(P24RequestError)
+    expect((error as unknown as P24RequestError).timedOut).toBe(false)
+    expect(error.message).toBe('P24 API request did not complete: POST fetch failed')
+  })
+
+  it('treats 5xx as unknown outcome and 4xx as a rejection', async () => {
+    const api = new P24ApiService(TEST_OPTIONS as never)
+
+    mockFetchResponse(503, 'Service Unavailable', '')
+    expect(isP24UnknownOutcomeError(await captureError(api.getCardInfo(1)))).toBe(true)
+
+    mockFetchResponse(400, 'Bad Request', '{"error":"Incorrect blikCode","code":400}')
+    expect(isP24UnknownOutcomeError(await captureError(api.getCardInfo(1)))).toBe(false)
+    expect(isP24UnknownOutcomeError(new Error('Incorrect ticket!'))).toBe(false)
   })
 })
