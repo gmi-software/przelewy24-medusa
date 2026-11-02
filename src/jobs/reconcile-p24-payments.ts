@@ -40,8 +40,14 @@ const RECONCILE_MAX_RETRIES = RECONCILE_PAGE_SIZE * 4
 
 const EMPTY_STATE: ReconcileState = { cursor: null, retry: [] }
 
-// Fallback when no cache module is registered; lost on restart.
+// This process's copy: the store when no cache module is registered, the
+// fallback when the cache cannot be read. Lost on restart.
 let memoryState: ReconcileState = EMPTY_STATE
+
+/** Tests only: each test starts from an empty sweep. */
+export const resetReconcileMemoryState = () => {
+  memoryState = EMPTY_STATE
+}
 
 type CursorStore = {
   get: () => Promise<unknown>
@@ -121,8 +127,10 @@ const readState = async (store: CursorStore, logger: { warn: (m: string) => void
   try {
     return parseReconcileState(await store.get())
   } catch (error) {
-    logger.warn(`[p24-reconcile] Could not read the sweep cursor; starting from the oldest session: ${getJobErrorMessage(error)}`)
-    return EMPTY_STATE
+    // The copy this process saved last: better than restarting the sweep at
+    // the oldest session on every run while the cache is down.
+    logger.warn(`[p24-reconcile] Could not read the sweep cursor; using this process's copy: ${getJobErrorMessage(error)}`)
+    return memoryState
   }
 }
 
@@ -131,6 +139,7 @@ const writeState = async (
   state: ReconcileState,
   logger: { warn: (m: string) => void },
 ) => {
+  memoryState = state
   try {
     await store.set(state)
   } catch (error) {
@@ -189,9 +198,64 @@ function hasRegisteredP24Transaction(
   )
 }
 
+const RECONCILE_RUN_LOCK_KEY = 'p24-reconcile:run'
+/** Longer than any run; released at the end, so it only matters on a crash. */
+const RECONCILE_RUN_LOCK_SECONDS = 15 * 60
+
+type RunLock = {
+  acquire: (key: string, args: { ownerId: string; expire: number }) => Promise<unknown>
+  release: (key: string, args: { ownerId: string }) => Promise<unknown>
+}
+
+/**
+ * One run at a time across workers: overlapping runs would read the same
+ * state, query the same sessions and race to capture them. A run that finds
+ * the lock taken skips; the next tick picks up where the other one stops.
+ */
 export default async function reconcileP24PaymentsJob(
   container: MedusaContainer,
 ) {
+  const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
+  let locking: RunLock | null = null
+  try {
+    const service = container.resolve<RunLock>(Modules.LOCKING)
+    locking =
+      typeof service?.acquire === 'function' && typeof service?.release === 'function'
+        ? service
+        : null
+  } catch {
+    locking = null
+  }
+
+  if (!locking) {
+    return reconcileOnce(container)
+  }
+
+  const ownerId = `p24-reconcile:${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+  try {
+    await locking.acquire(RECONCILE_RUN_LOCK_KEY, {
+      ownerId,
+      expire: RECONCILE_RUN_LOCK_SECONDS,
+    })
+  } catch (error) {
+    logger.warn(
+      `[p24-reconcile] Previous run still in progress; skipping this one: ${getJobErrorMessage(error)}`,
+    )
+    return
+  }
+
+  try {
+    await reconcileOnce(container)
+  } finally {
+    await locking
+      .release(RECONCILE_RUN_LOCK_KEY, { ownerId })
+      .catch((error) =>
+        logger.warn(`[p24-reconcile] Could not release the run lock: ${getJobErrorMessage(error)}`),
+      )
+  }
+}
+
+async function reconcileOnce(container: MedusaContainer) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
 
@@ -243,6 +307,8 @@ export default async function reconcileP24PaymentsJob(
     paymentSessions.push(...((data ?? []) as ReconcileCandidate[]))
   }
   const retried = new Set(paymentSessions.map((session) => session.id))
+  // Sweep order, for holding the cursor back (see the end of the run).
+  const swept: (ReconcileCandidate & { updated_at?: unknown })[] = []
 
   for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
     const { data } = await query.graph({
@@ -263,6 +329,7 @@ export default async function reconcileP24PaymentsJob(
 
     const rows = (data ?? []) as (ReconcileCandidate & { updated_at?: unknown })[]
     paymentSessions.push(...rows.filter((row) => !retried.has(row.id)))
+    swept.push(...rows)
 
     if (rows.length < RECONCILE_PAGE_SIZE) {
       break
@@ -377,15 +444,25 @@ export default async function reconcileP24PaymentsJob(
   // Only now, with everything read also processed: a crash before this line
   // repeats the run, and a failed session is read again next run. A sweep
   // that reached the end starts from the oldest session next time.
-  if (failed.length > RECONCILE_MAX_RETRIES) {
+  // Failures past the retry bound stay reachable by holding the cursor just
+  // before the first of them that the sweep read: the next run reads it
+  // (and what follows) again instead of leaving it behind until a wrap.
+  const retry = failed.slice(0, RECONCILE_MAX_RETRIES)
+  const omitted = new Set(failed.slice(RECONCILE_MAX_RETRIES))
+  let nextCursor = capped ? cursor : null
+  if (omitted.size) {
+    const firstOmitted = swept.findIndex((row) => omitted.has(row.id))
     logger.warn(
-      `[p24-reconcile] ${failed.length} sessions failed; retrying the first ${RECONCILE_MAX_RETRIES}, the rest when the sweep comes round again`,
+      `[p24-reconcile] ${failed.length} sessions failed; retrying ${retry.length} directly and re-reading the sweep from the first of the rest`,
     )
+    if (capped && firstOmitted !== -1) {
+      const before = swept[firstOmitted - 1]
+      nextCursor = before
+        ? { updated_at: toIso(before.updated_at), id: before.id }
+        : startState.cursor
+    }
   }
-  const nextState: ReconcileState = {
-    cursor: capped ? cursor : null,
-    retry: failed.slice(0, RECONCILE_MAX_RETRIES),
-  }
+  const nextState: ReconcileState = { cursor: nextCursor, retry }
   if (
     nextState.cursor !== null ||
     nextState.retry.length ||

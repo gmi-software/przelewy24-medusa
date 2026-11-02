@@ -12,7 +12,7 @@ vi.mock("../../api/store/payments/utils/charge-helper", () => ({
   resolvePaymentProviderById: () => ({ queryTransactionStatus }),
 }));
 
-import reconcileP24PaymentsJob from "../reconcile-p24-payments";
+import reconcileP24PaymentsJob, { resetReconcileMemoryState } from "../reconcile-p24-payments";
 
 const setup = (paidGrosze: number) => {
   run.mockClear();
@@ -79,6 +79,7 @@ const setupPages = (
   pages: Array<Array<Record<string, unknown>>>,
   { cache = true }: { cache?: boolean } = {},
 ) => {
+  resetReconcileMemoryState();
   run.mockClear();
   queryTransactionStatus.mockReset();
   queryTransactionStatus.mockResolvedValue({
@@ -136,6 +137,7 @@ const setupPages = (
   const container = {
     resolve: (key: string) => {
       if (key === ContainerRegistrationKeys.LOGGER) return logger;
+      if (key === "locking") throw new Error("locking is not registered");
       if (key === "caching" || key === "cache") {
         if (cache && key === "caching") return caching;
         throw new Error(`${key} is not registered`);
@@ -195,7 +197,7 @@ describe("reconcileP24PaymentsJob paging", () => {
   });
 
   it("reconciles an errored session only when its charge was submitted", async () => {
-    const { container } = setupPages([
+    const { container, graph } = setupPages([
       [
         candidate({ id: "payses_never_charged", status: "error" }),
         candidate({
@@ -209,6 +211,8 @@ describe("reconcileP24PaymentsJob paging", () => {
     ]);
 
     await reconcileP24PaymentsJob(container as any);
+
+    expect(graph.mock.calls[0][0].filters.status.$in).toContain("error");
 
     expect(queryTransactionStatus).toHaveBeenCalledTimes(1);
     expect(queryTransactionStatus).toHaveBeenCalledWith(SESSION_ID);
@@ -310,15 +314,83 @@ describe("reconcileP24PaymentsJob paging", () => {
     );
   });
 
-  it("saves the cursor only after every session read was processed", async () => {
-    const pages = Array.from({ length: 21 }, capturedPage);
-    pages[0][0] = candidate({ id: "payses_paid" });
-    const { container, caching } = setupPages(pages);
+  it("saves the state only after every session read was processed", async () => {
+    const { container, caching } = setupPages([
+      [candidate({ id: "payses_first" }), candidate({ id: "payses_last" })],
+    ]);
+    run.mockRejectedValueOnce(new Error("database went away"));
 
     await reconcileP24PaymentsJob(container as any);
 
-    expect(run.mock.invocationCallOrder[0]).toBeLessThan(
-      caching.set.mock.invocationCallOrder[0],
+    const runOrders = run.mock.invocationCallOrder;
+    expect(runOrders).toHaveLength(2);
+    expect(caching.set.mock.invocationCallOrder[0]).toBeGreaterThan(runOrders[1]);
+    expect(caching.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { cursor: null, retry: ["payses_first"] } }),
+    );
+  });
+
+  it("holds the cursor before the first failure past the retry bound", async () => {
+    const { container, caching, rows } = setupPages(
+      Array.from({ length: 21 }, () =>
+        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
+      ),
+    );
+    run.mockRejectedValue(new Error("database went away"));
+
+    await reconcileP24PaymentsJob(container as any);
+    run.mockReset();
+
+    const state = caching.set.mock.calls.at(-1)![0].data;
+    expect(state.retry).toHaveLength(200);
+    expect(state.retry[0]).toBe(rows[0].id);
+    expect(state.cursor).toEqual({ updated_at: rows[199].updated_at, id: rows[199].id });
+  });
+
+  it("uses this process's copy of the state while the cache cannot be read", async () => {
+    const { container, graph, caching, rows } = setupPages(
+      Array.from({ length: 21 }, capturedPage),
+    );
+
+    await reconcileP24PaymentsJob(container as any);
+    caching.get.mockRejectedValueOnce(new Error("redis down"));
+    graph.mockClear();
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(graph.mock.calls[0][0].filters.$or[1].id.$gt).toBe(rows[999].id);
+  });
+
+  it("skips the run while another one holds the run lock", async () => {
+    const { container, graph } = setupPages([[candidate()]]);
+    const locking = {
+      acquire: vi.fn().mockRejectedValue(new Error("Failed to acquire lock")),
+      release: vi.fn(),
+    };
+    const resolve = container.resolve;
+    container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(graph).not.toHaveBeenCalled();
+    expect(locking.release).not.toHaveBeenCalled();
+  });
+
+  it("runs under the run lock and releases it", async () => {
+    const { container } = setupPages([[candidate()]]);
+    const locking = { acquire: vi.fn(), release: vi.fn().mockResolvedValue(true) };
+    const resolve = container.resolve;
+    container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(locking.acquire).toHaveBeenCalledWith(
+      "p24-reconcile:run",
+      expect.objectContaining({ expire: 900 }),
+    );
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(locking.release).toHaveBeenCalledWith(
+      "p24-reconcile:run",
+      { ownerId: locking.acquire.mock.calls[0][1].ownerId },
     );
   });
 
