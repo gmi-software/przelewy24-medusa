@@ -26,6 +26,9 @@ export { P24ApiError, P24RequestError };
 /** Without a signal, fetch waits for the OS socket timeout (minutes). */
 export const DEFAULT_P24_REQUEST_TIMEOUT_MS = 20_000;
 
+/** Largest delay a Node timer honours (2^31 - 1 ms). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export class P24ApiService {
   private readonly options: P24Options;
   private readonly baseURL: string;
@@ -37,8 +40,12 @@ export class P24ApiService {
       sandbox: coerceSandbox(options.sandbox),
     };
     const timeoutMs = Number(options.request_timeout_ms);
+    // AbortSignal.timeout throws on a fraction or above 2^32-1, and the timer
+    // clamps 2^31..2^32-1 to 1 ms: either way every request would fail.
     this.requestTimeoutMs =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
+      Number.isInteger(timeoutMs) &&
+      timeoutMs >= 1 &&
+      timeoutMs <= MAX_TIMER_DELAY_MS
         ? timeoutMs
         : DEFAULT_P24_REQUEST_TIMEOUT_MS;
     this.baseURL = this.options.sandbox
@@ -234,7 +241,6 @@ export class P24ApiService {
         body: data ? JSON.stringify(data) : undefined,
         signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
-      responseText = await response.text();
     } catch (error) {
       throw new P24RequestError({
         method,
@@ -242,6 +248,22 @@ export class P24ApiService {
         timeoutMs: this.requestTimeoutMs,
         cause: error,
       });
+    }
+
+    try {
+      responseText = await response.text();
+    } catch (error) {
+      // A rejection is a rejection even when its body cannot be read; only
+      // an answer we cannot read on success leaves the outcome unknown.
+      if (response.ok) {
+        throw new P24RequestError({
+          method,
+          endpoint,
+          timeoutMs: this.requestTimeoutMs,
+          cause: error,
+        });
+      }
+      responseText = "";
     }
 
     if (!response.ok) {

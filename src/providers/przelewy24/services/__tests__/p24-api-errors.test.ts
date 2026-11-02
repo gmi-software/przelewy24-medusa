@@ -323,6 +323,75 @@ describe('P24ApiService request timeouts', () => {
     timeout.mockRestore()
   })
 
+  it.each([1500.5, 0, -1, 2_147_483_648, 4_294_967_296, Number.NaN, '20s'])(
+    'falls back to the default timeout for %s',
+    async (value) => {
+      mockFetchResponse(200, 'OK', '{"responseCode":0}')
+      const timeout = vi.spyOn(AbortSignal, 'timeout')
+
+      await new P24ApiService({ ...TEST_OPTIONS, request_timeout_ms: value } as never)
+        .getTransactionBySessionId('payses_01ABC')
+
+      expect(timeout).toHaveBeenCalledWith(20000)
+      timeout.mockRestore()
+    },
+  )
+
+  it('accepts the largest delay a timer honours', async () => {
+    mockFetchResponse(200, 'OK', '{"responseCode":0}')
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+
+    await new P24ApiService({ ...TEST_OPTIONS, request_timeout_ms: 2_147_483_647 } as never)
+      .getTransactionBySessionId('payses_01ABC')
+
+    expect(timeout).toHaveBeenCalledWith(2_147_483_647)
+    timeout.mockRestore()
+  })
+
+  it('reports a rejection whose body cannot be read as a rejection', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: 'Bad Request',
+        text: () => Promise.reject(new Error('socket hang up')),
+      }),
+    )
+
+    const error = await captureError(
+      new P24ApiService(TEST_OPTIONS as never).chargeBlikByCode({
+        token: BLIK_TOKEN,
+        blikCode: '777123',
+      }),
+    )
+
+    expect(error).toBeInstanceOf(P24ApiError)
+    expect(isP24UnknownOutcomeError(error)).toBe(false)
+  })
+
+  it('keeps an unreadable success as an unknown outcome', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: () => Promise.reject(new Error('socket hang up')),
+      }),
+    )
+
+    const error = await captureError(
+      new P24ApiService(TEST_OPTIONS as never).chargeBlikByCode({
+        token: BLIK_TOKEN,
+        blikCode: '777123',
+      }),
+    )
+
+    expect(error).toBeInstanceOf(P24RequestError)
+    expect(isP24UnknownOutcomeError(error)).toBe(true)
+  })
+
   it('reports a timed-out charge as an unknown outcome, not a rejection', async () => {
     const abort = new DOMException('The operation was aborted due to timeout', 'TimeoutError')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abort))

@@ -67,7 +67,18 @@ const candidate = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const setupPages = (pages: Array<Array<Record<string, unknown>>>) => {
+const minute = (index: number) =>
+  new Date(Date.UTC(2026, 10, 2, 8, 0) + index * 60_000).toISOString();
+
+/**
+ * Serves `rows` (oldest first) like query.graph does for the keyset filter:
+ * everything after the cursor row, `take` at a time. `caching` mimics the
+ * caching module unless `cache: false`.
+ */
+const setupPages = (
+  pages: Array<Array<Record<string, unknown>>>,
+  { cache = true }: { cache?: boolean } = {},
+) => {
   run.mockClear();
   queryTransactionStatus.mockReset();
   queryTransactionStatus.mockResolvedValue({
@@ -76,30 +87,65 @@ const setupPages = (pages: Array<Array<Record<string, unknown>>>) => {
     transactionDetails: { data: { amount: 22000 } },
   });
 
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const graph = vi.fn(async ({ pagination }: { pagination: { skip: number } }) => ({
-    data: pages[pagination.skip / 50] ?? [],
+  const flat = pages.flat();
+  // Pages built from one template share an id; keep ids unique like the DB.
+  const rows = flat.map((row, index) => ({
+    ...row,
+    id:
+      flat.filter((other) => other.id === row.id).length > 1
+        ? `${row.id}_${index}`
+        : row.id,
+    updated_at: minute(index),
   }));
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const graph = vi.fn(
+    async ({
+      filters,
+      pagination,
+    }: {
+      filters: { $or?: [unknown, { id: { $gt: string } }] };
+      pagination: { take: number };
+    }) => {
+      const afterId = filters.$or?.[1].id.$gt;
+      const start = afterId ? rows.findIndex((row) => row.id === afterId) + 1 : 0;
+      return { data: rows.slice(start, start + pagination.take) };
+    },
+  );
+  const store = new Map<string, unknown>();
+  const caching = {
+    get: vi.fn(async ({ key }: { key: string }) => store.get(key) ?? null),
+    set: vi.fn(async ({ key, data }: { key: string; data: unknown }) => {
+      store.set(key, data);
+    }),
+  };
   const container = {
-    resolve: (key: string) =>
-      key === ContainerRegistrationKeys.LOGGER ? logger : { graph },
+    resolve: (key: string) => {
+      if (key === ContainerRegistrationKeys.LOGGER) return logger;
+      if (key === "caching" || key === "cache") {
+        if (cache && key === "caching") return caching;
+        throw new Error(`${key} is not registered`);
+      }
+      return { graph };
+    },
   };
 
-  return { container, logger, graph };
+  return { container, logger, graph, caching, rows };
 };
 
 describe("reconcileP24PaymentsJob paging", () => {
-  it("pages through every candidate, oldest first", async () => {
-    const fullPage = Array.from({ length: 50 }, (_, index) =>
-      candidate({ id: `payses_page0_${index}` }),
-    );
-    const { container, graph } = setupPages([fullPage, [candidate()]]);
+  it("pages through every candidate, oldest first, after the last row read", async () => {
+    const fullPage = Array.from({ length: 50 }, () => candidate({ id: "payses_page0" }));
+    const { container, graph, rows } = setupPages([fullPage, [candidate()]]);
 
     await reconcileP24PaymentsJob(container as any);
 
     expect(graph).toHaveBeenCalledTimes(2);
+    expect(graph.mock.calls[0][0].filters.$or).toBeUndefined();
+    expect(graph.mock.calls[1][0].filters.$or).toEqual([
+      { updated_at: { $gt: rows[49].updated_at } },
+      { updated_at: rows[49].updated_at, id: { $gt: rows[49].id } },
+    ]);
     expect(graph.mock.calls[1][0].pagination).toEqual({
-      skip: 50,
       take: 50,
       order: { updated_at: "ASC", id: "ASC" },
     });
@@ -159,31 +205,65 @@ describe("reconcileP24PaymentsJob paging", () => {
     });
   });
 
-  it("stops at the page cap and resumes there on the next run", async () => {
-    const fullPage = Array.from({ length: 50 }, (_, index) =>
-      candidate({ id: `payses_full_${index}`, payment_collection: { payments: [{ captured_at: "x" }] } }),
+  const capturedPage = () =>
+    Array.from({ length: 50 }, () =>
+      candidate({ id: "payses_full", payment_collection: { payments: [{ captured_at: "x" }] } }),
     );
-    const { container, logger, graph } = setupPages(
-      Array.from({ length: 25 }, () => fullPage),
+
+  it("stops at the page cap and resumes after the last session read, in the cache", async () => {
+    const { container, logger, graph, caching, rows } = setupPages(
+      Array.from({ length: 25 }, capturedPage),
     );
 
     await reconcileP24PaymentsJob(container as any);
 
     expect(graph).toHaveBeenCalledTimes(20);
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("resumes at page 20"),
+      expect.stringContaining(`resumes after session ${rows[999].id}`),
+    );
+    expect(caching.set).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: { updated_at: rows[999].updated_at, id: rows[999].id },
+      }),
     );
 
     graph.mockClear();
     await reconcileP24PaymentsJob(container as any);
 
-    expect(graph.mock.calls[0][0].pagination.skip).toBe(1000);
+    expect(graph.mock.calls[0][0].filters.$or[1].id.$gt).toBe(rows[999].id);
     expect(graph).toHaveBeenCalledTimes(6);
+    expect(caching.set).toHaveBeenLastCalledWith(expect.objectContaining({ data: null }));
 
     graph.mockClear();
     await reconcileP24PaymentsJob(container as any);
 
-    expect(graph.mock.calls[0][0].pagination.skip).toBe(0);
+    expect(graph.mock.calls[0][0].filters.$or).toBeUndefined();
+  });
+
+  it("does not skip a session when an earlier one leaves the window between runs", async () => {
+    const { container, graph, rows } = setupPages(Array.from({ length: 21 }, capturedPage));
+
+    await reconcileP24PaymentsJob(container as any);
+    // An offset would now point 1 row too far; the keyset does not care.
+    rows.splice(10, 1);
+    graph.mockClear();
+    await reconcileP24PaymentsJob(container as any);
+
+    const served = (await graph.mock.results[0].value).data as { id: string }[];
+    expect(served[0].id).toBe(rows[999].id);
+  });
+
+  it("keeps the cursor in memory when no cache module is registered", async () => {
+    const { container, graph, rows } = setupPages(
+      Array.from({ length: 21 }, capturedPage),
+      { cache: false },
+    );
+
+    await reconcileP24PaymentsJob(container as any);
+    graph.mockClear();
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(graph.mock.calls[0][0].filters.$or[1].id.$gt).toBe(rows[999].id);
   });
 });
 

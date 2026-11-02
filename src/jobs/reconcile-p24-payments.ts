@@ -1,5 +1,5 @@
 import { MedusaContainer } from '@medusajs/framework/types'
-import { ContainerRegistrationKeys } from '@medusajs/framework/utils'
+import { ContainerRegistrationKeys, Modules } from '@medusajs/framework/utils'
 import { processPaymentWorkflow } from '@medusajs/medusa/core-flows'
 import { PaymentActions } from '@medusajs/framework/utils'
 
@@ -18,8 +18,115 @@ const RECONCILE_PAGE_SIZE = 50
 // Bounds one run; the next run resumes after the last page read.
 const RECONCILE_MAX_PAGES = 20
 
-// Per process, so a restart only re-reads the oldest pages.
-let resumeFromPage = 0
+const RECONCILE_CURSOR_KEY = 'p24-reconcile:cursor'
+
+/**
+ * Where the last capped run stopped: the (updated_at, id) of the last session
+ * it read. A position, not a page offset — a session reconciled in between
+ * leaves the window and would shift every offset after it, skipping sessions
+ * that were never read.
+ */
+export type ReconcileCursor = { updated_at: string; id: string }
+
+// Fallback when no cache module is registered; lost on restart.
+let memoryCursor: ReconcileCursor | null = null
+
+type CursorStore = {
+  get: () => Promise<ReconcileCursor | null>
+  set: (cursor: ReconcileCursor | null) => Promise<void>
+}
+
+const resolveOptional = <T extends { get: unknown; set: unknown }>(
+  container: MedusaContainer,
+  key: string,
+): T | null => {
+  try {
+    const service = container.resolve<T>(key)
+    return typeof service?.get === 'function' &&
+      typeof service?.set === 'function'
+      ? service
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Keeps the cursor in the caching module (Redis in production) so a restart
+ * resumes the sweep instead of starting over at the oldest session; falls
+ * back to the legacy cache module, then to process memory.
+ */
+export const resolveCursorStore = (
+  container: MedusaContainer,
+): CursorStore => {
+  const ttl = RECONCILE_MAX_AGE_HOURS * 60 * 60
+  const caching = resolveOptional<{
+    get: (input: { key: string }) => Promise<unknown>
+    set: (input: { key: string; data: unknown; ttl?: number }) => Promise<void>
+  }>(container, Modules.CACHING)
+  if (caching) {
+    return {
+      get: async () =>
+        ((await caching.get({ key: RECONCILE_CURSOR_KEY })) as ReconcileCursor | null) ?? null,
+      set: (cursor) =>
+        caching.set({ key: RECONCILE_CURSOR_KEY, data: cursor, ttl }),
+    }
+  }
+
+  const cache = resolveOptional<{
+    get: (key: string) => Promise<unknown>
+    set: (key: string, data: unknown, ttl?: number) => Promise<void>
+  }>(container, Modules.CACHE)
+  if (cache) {
+    return {
+      get: async () =>
+        ((await cache.get(RECONCILE_CURSOR_KEY)) as ReconcileCursor | null) ?? null,
+      set: (cursor) => cache.set(RECONCILE_CURSOR_KEY, cursor, ttl),
+    }
+  }
+
+  return {
+    get: async () => memoryCursor,
+    set: async (cursor) => {
+      memoryCursor = cursor
+    },
+  }
+}
+
+const readCursor = async (store: CursorStore, logger: { warn: (m: string) => void }) => {
+  try {
+    const cursor = await store.get()
+    return cursor?.updated_at && cursor?.id ? cursor : null
+  } catch (error) {
+    logger.warn(`[p24-reconcile] Could not read the sweep cursor; starting from the oldest session: ${getJobErrorMessage(error)}`)
+    return null
+  }
+}
+
+const writeCursor = async (
+  store: CursorStore,
+  cursor: ReconcileCursor | null,
+  logger: { warn: (m: string) => void },
+) => {
+  try {
+    await store.set(cursor)
+  } catch (error) {
+    logger.warn(`[p24-reconcile] Could not save the sweep cursor: ${getJobErrorMessage(error)}`)
+  }
+}
+
+const afterCursor = (cursor: ReconcileCursor | null) =>
+  cursor
+    ? {
+        $or: [
+          { updated_at: { $gt: cursor.updated_at } },
+          { updated_at: cursor.updated_at, id: { $gt: cursor.id } },
+        ],
+      }
+    : {}
+
+const toIso = (value: unknown) =>
+  value instanceof Date ? value.toISOString() : String(value)
 
 // `error` only with `charge_submitted_at`: a charge whose answer we lost may
 // still have been paid.
@@ -70,14 +177,16 @@ export default async function reconcileP24PaymentsJob(
     Date.now() - RECONCILE_MAX_AGE_HOURS * 60 * 60 * 1000,
   )
 
-  // Every page is read before any is processed: a reconciled session leaves
-  // the window and would shift the offsets of the pages after it.
+  // Every page is read before any is processed, and each page continues
+  // after the last row of the one before (keyset), so a session reconciled
+  // mid-run cannot shift a later one out of reach.
   const paymentSessions: ReconcileCandidate[] = []
+  const cursorStore = resolveCursorStore(container)
+  const startCursor = await readCursor(cursorStore, logger)
+  let cursor = startCursor
+  let capped = false
 
-  const firstPage = resumeFromPage
-  resumeFromPage = 0
-
-  for (let page = firstPage; page < firstPage + RECONCILE_MAX_PAGES; page += 1) {
+  for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
     const { data } = await query.graph({
       entity: 'payment_session',
       fields: [
@@ -101,9 +210,9 @@ export default async function reconcileP24PaymentsJob(
           $lte: cutoff.toISOString(),
           $gte: maxAge.toISOString(),
         },
+        ...afterCursor(cursor),
       },
       pagination: {
-        skip: page * RECONCILE_PAGE_SIZE,
         take: RECONCILE_PAGE_SIZE,
         order: {
           updated_at: 'ASC',
@@ -112,18 +221,28 @@ export default async function reconcileP24PaymentsJob(
       },
     })
 
-    paymentSessions.push(...((data ?? []) as ReconcileCandidate[]))
+    const rows = (data ?? []) as (ReconcileCandidate & { updated_at?: unknown })[]
+    paymentSessions.push(...rows)
 
-    if (!data || data.length < RECONCILE_PAGE_SIZE) {
+    if (rows.length < RECONCILE_PAGE_SIZE) {
       break
     }
 
-    if (page === firstPage + RECONCILE_MAX_PAGES - 1) {
-      resumeFromPage = page + 1
+    const last = rows[rows.length - 1]!
+    cursor = { updated_at: toIso(last.updated_at), id: last.id }
+
+    if (page === RECONCILE_MAX_PAGES - 1) {
+      capped = true
       logger.warn(
-        `[p24-reconcile] Stopped after ${paymentSessions.length} payment sessions; the next run resumes at page ${resumeFromPage}`,
+        `[p24-reconcile] Stopped after ${paymentSessions.length} payment sessions; the next run resumes after session ${cursor.id}`,
       )
     }
+  }
+
+  // Saved before processing, so a crash mid-run still moves the sweep on;
+  // a sweep that reached the end starts from the oldest session next time.
+  if (capped || startCursor) {
+    await writeCursor(cursorStore, capped ? cursor : null, logger)
   }
 
   let reconciled = 0
