@@ -84,9 +84,11 @@ describe("GET /return", () => {
         }),
       );
 
-      // a stalled database: both returns time out on the same query
+      // a stalled database: both returns, each with its own request scope,
+      // time out on the same query
+      const otherReq = { ...req, scope: { resolve: vi.fn(req.scope.resolve) } };
       const first = GET(req as never, res as never);
-      const second = GET(req as never, res as never);
+      const second = GET(otherReq as never, res as never);
       await vi.advanceTimersByTimeAsync(2000);
       await Promise.all([first, second]);
       // still pending well past the redirect timeout: not asked again

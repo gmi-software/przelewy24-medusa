@@ -35,8 +35,12 @@ export type ReconcileCursor = { updated_at: string; id: string }
  */
 export type ReconcileState = { cursor: ReconcileCursor | null; retry: string[] }
 
-/** A failure storm must not turn the retry pass into a second sweep. */
-const RECONCILE_MAX_RETRIES = RECONCILE_PAGE_SIZE * 4
+/**
+ * One run of the sweep: every session a run read and failed is kept for the
+ * next one, so failures leave the retry list only past this many at once.
+ * Ids that leave the 48-hour window drop out, as the retry read filters by it.
+ */
+const RECONCILE_MAX_RETRIES = RECONCILE_PAGE_SIZE * RECONCILE_MAX_PAGES
 
 const EMPTY_STATE: ReconcileState = { cursor: null, retry: [] }
 

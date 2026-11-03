@@ -12,7 +12,7 @@
 ### Fixed
 - Refunds sent `amount: null` to P24: Medusa passes `refund.raw_amount` (`{ value, precision }`), which `Number()` turns into NaN. The raw value is converted to grosze
 - A refund that times out, gets a 5xx or a 409 is looked up with `GET /refund/by/orderId/{orderId}` before it fails. When P24 holds its `requestId` it is reported as requested; before, Medusa deleted the refund and a retry with a new request id refunded the customer twice
-- `reconcile-p24-payments` reaches every candidate session: a keyset cursor (`updated_at`, `id`) kept in the caching module (not auto-invalidated), failed sessions retried first (up to 200), the cursor advanced only past processed sessions, one run at a time across workers (locking module), and a 10-minute run budget inside the 15-minute run lock. A card registration whose answer never came is reconciled too
+- `reconcile-p24-payments` reaches every candidate session: a keyset cursor (`updated_at`, `id`) kept in the caching module (not auto-invalidated), failed sessions retried first (up to one run of the sweep, 1000), the cursor advanced only past processed sessions, one run at a time across workers (locking module), and a 10-minute run budget inside the 15-minute run lock. A card registration whose answer never came is reconciled too
 - Every P24 call has a timeout (`request_timeout_ms`, integer 1–2^31-1, default 20 s); a call with no answer is an unknown outcome, not a refusal
 - Capture skips verify for a transaction P24 already reports verified, and retries verify on an unknown outcome
 - A timeout whose message contains `404` (e.g. `request_timeout_ms` 4040) is no longer taken for a stale session

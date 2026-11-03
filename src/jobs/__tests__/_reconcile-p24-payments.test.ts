@@ -387,40 +387,60 @@ describe("reconcileP24PaymentsJob paging", () => {
     }
   });
 
+  // A previous run that failed all 1000 sessions it read: they fill the retry list.
+  const failingBacklog = (pageCount: number) => {
+    const setup = setupPages(
+      Array.from({ length: pageCount }, () =>
+        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
+      ),
+    );
+    const { caching, rows } = setup;
+    caching.get.mockResolvedValueOnce({
+      cursor: { updated_at: rows[999].updated_at, id: rows[999].id },
+      retry: rows.slice(0, 1000).map((row) => row.id),
+    });
+    return setup;
+  };
+  const failExcept = (ok: Set<string>) =>
+    run.mockImplementation(async ({ input }: any) => {
+      if (ok.has(input.data.session_id)) return {};
+      throw new Error("database went away");
+    });
+
   it("holds the cursor before the first failure past the retry bound", async () => {
-    const { container, caching, rows } = setupPages(
-      Array.from({ length: 21 }, () =>
-        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
-      ),
-    );
-    run.mockRejectedValue(new Error("database went away"));
+    const { container, caching, rows } = failingBacklog(42);
+    // the first ten swept rows go through, the rest fail like the retries
+    failExcept(new Set(rows.slice(1000, 1010).map((row) => row.id)));
 
-    await reconcileP24PaymentsJob(container as any);
-    run.mockReset();
-
-    const state = caching.set.mock.calls.at(-1)![0].data;
-    expect(state.retry).toHaveLength(200);
-    expect(state.retry[0]).toBe(rows[0].id);
-    expect(state.cursor).toEqual({ updated_at: rows[199].updated_at, id: rows[199].id });
-  });
-
-  it("moves the sweep on when the row past a held cursor fails again", async () => {
-    const { container, caching, rows } = setupPages(
-      Array.from({ length: 26 }, () =>
-        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
-      ),
-    );
-    run.mockRejectedValue(new Error("database went away"));
-
-    await reconcileP24PaymentsJob(container as any);
     await reconcileP24PaymentsJob(container as any);
     run.mockReset();
     run.mockResolvedValue({});
 
-    // the second run re-read from rows[200], failed there again and moved on
     const state = caching.set.mock.calls.at(-1)![0].data;
-    expect(state.retry).toHaveLength(200);
-    expect(state.cursor).toEqual({ updated_at: rows[1199].updated_at, id: rows[1199].id });
+    expect(state.retry).toEqual(rows.slice(0, 1000).map((row) => row.id));
+    expect(state.cursor).toEqual({ updated_at: rows[1009].updated_at, id: rows[1009].id });
+  });
+
+  it("moves the sweep on when the row past a held cursor fails, and reads the rest on its next pass", async () => {
+    const { container, caching, rows } = failingBacklog(42);
+    failExcept(new Set());
+
+    await reconcileP24PaymentsJob(container as any);
+
+    // the first swept row failed: holding there would read it again forever
+    const state = caching.set.mock.calls.at(-1)![0].data;
+    expect(state.retry).toHaveLength(1000);
+    expect(state.cursor).toEqual({ updated_at: rows[1999].updated_at, id: rows[1999].id });
+
+    // the outage is over: the sweep finishes, wraps and reaches the rest
+    run.mockReset();
+    run.mockResolvedValue({});
+    for (let pass = 0; pass < 3; pass += 1) {
+      await reconcileP24PaymentsJob(container as any);
+    }
+    const processed = new Set(run.mock.calls.map(([{ input }]: any) => input.data.session_id));
+    expect(processed.has(rows[1000].id)).toBe(true);
+    expect(processed.has(rows[1999].id)).toBe(true);
   });
 
   it("does not release the run lock under a renewal still in flight", async () => {
@@ -454,12 +474,11 @@ describe("reconcileP24PaymentsJob paging", () => {
     try {
       run.mockImplementationOnce(async () => {
         await vi.advanceTimersByTimeAsync(61_000);
+        // the heartbeat has called acquire by now: its renewal lands after the capture
+        setTimeout(() => finishRenewal(), 0);
         return {};
       });
-      const pending = reconcileP24PaymentsJob(container as any);
-      // real timers still run setTimeout: the renewal lands after the capture
-      setTimeout(() => finishRenewal(), 20);
-      await pending;
+      await reconcileP24PaymentsJob(container as any);
     } finally {
       run.mockReset();
       run.mockResolvedValue({});
