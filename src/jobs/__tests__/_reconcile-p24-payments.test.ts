@@ -450,10 +450,47 @@ describe("reconcileP24PaymentsJob paging", () => {
     );
   });
 
+  it("renews the run lock while reading pages and before writing the state", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // past the page cap, so the run saves a cursor
+      const { container, graph, caching } = setupPages(
+        Array.from({ length: 21 }, capturedPage),
+      );
+      const read = graph.getMockImplementation()!;
+      // every page read takes two minutes
+      graph.mockImplementation(async (args: any) => {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return read(args);
+      });
+      const locking = {
+        acquire: vi.fn().mockResolvedValue(undefined),
+        release: vi.fn().mockResolvedValue(true),
+      };
+      const resolve = container.resolve;
+      container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+
+      await reconcileP24PaymentsJob(container as any);
+
+      const setOrder = caching.set.mock.invocationCallOrder.at(-1)!;
+      const acquires = locking.acquire.mock.invocationCallOrder;
+      // the first acquire, renewals between page reads, one right before the write
+      expect(acquires.length).toBeGreaterThanOrEqual(4);
+      expect(acquires.at(-1)!).toBeLessThan(setOrder);
+      expect(
+        graph.mock.invocationCallOrder.some(
+          (order) => order > acquires[1] && order < acquires.at(-1)!,
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renews the run lock as it goes and stops once it is lost", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
-      const { container } = setupPages([
+      const { container, caching } = setupPages([
         [
           candidate({ id: "payses_a" }),
           candidate({ id: "payses_b" }),
@@ -486,6 +523,8 @@ describe("reconcileP24PaymentsJob paging", () => {
       ]);
       // a, b (after renewing), then the renewal before c fails
       expect(run).toHaveBeenCalledTimes(2);
+      // another run holds the sweep now: its state is not overwritten
+      expect(caching.set).not.toHaveBeenCalled();
     } finally {
       run.mockReset();
       run.mockResolvedValue({});

@@ -283,11 +283,14 @@ export default async function reconcileP24PaymentsJob(
   }
 
   // The same owner acquiring again extends the lease (Redis, Postgres and the
-  // in-memory provider alike); false once the lock is gone, so the run stops.
+  // in-memory provider alike); false once the lock is gone, for good, so the
+  // run stops and writes nothing over the state of the run that took it.
   const lock = locking
   let renewedAt = Date.now()
-  const keepLock = async () => {
-    if (Date.now() - renewedAt < RECONCILE_LOCK_RENEW_MS) return true
+  let lost = false
+  const keepLock = async (force = false) => {
+    if (lost) return false
+    if (!force && Date.now() - renewedAt < RECONCILE_LOCK_RENEW_MS) return true
     try {
       await lock.acquire(RECONCILE_RUN_LOCK_KEY, {
         ownerId,
@@ -299,6 +302,7 @@ export default async function reconcileP24PaymentsJob(
       logger.warn(
         `[p24-reconcile] Lost the run lock; stopping this run: ${getJobErrorMessage(error)}`,
       )
+      lost = true
       return false
     }
   }
@@ -316,7 +320,8 @@ export default async function reconcileP24PaymentsJob(
 
 async function reconcileOnce(
   container: MedusaContainer,
-  keepLock: () => Promise<boolean>,
+  /** Renews the run lock (now with `force`); false once it is lost. */
+  keepLock: (force?: boolean) => Promise<boolean>,
 ) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
@@ -374,6 +379,9 @@ async function reconcileOnce(
   const swept: (ReconcileCandidate & { updated_at?: unknown })[] = []
 
   for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
+    // Nothing processed yet: a run that lost the lock just leaves.
+    if (!(await keepLock())) return
+
     const { data } = await query.graph({
       entity: 'payment_session',
       fields: candidateFields,
@@ -413,12 +421,12 @@ async function reconcileOnce(
   const failed: string[] = []
 
   for (const [index, session] of paymentSessions.entries()) {
-    // Out of time, or the lock is gone: what is left counts as failed, so the
-    // retry list and the held-back cursor below bring it into the next run.
-    if (
-      Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS ||
-      !(await keepLock())
-    ) {
+    // Another run holds the sweep now: it reads this state, so leave it.
+    if (!(await keepLock())) return
+
+    // Out of time: what is left counts as failed, so the retry list and the
+    // held-back cursor below bring it into the next run.
+    if (Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS) {
       const left = paymentSessions.slice(index).map((row) => row.id)
       logger.warn(
         `[p24-reconcile] Run budget spent; leaving ${left.length} session(s) for the next run`,
@@ -556,6 +564,8 @@ async function reconcileOnce(
     startState.cursor !== null ||
     startState.retry.length
   ) {
+    // The state is the sweep's: only the run that still holds the lock writes it.
+    if (!(await keepLock(true))) return
     await writeState(cursorStore, nextState, logger)
   }
 
