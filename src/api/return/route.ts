@@ -35,11 +35,12 @@ async function registeredProviderKeys(req: MedusaRequest): Promise<string[]> {
     req.scope
       .resolve(ContainerRegistrationKeys.LOGGER)
       .warn(
-        `P24 return: could not list payment providers, trying every P24 key: ${
+        `P24 return: could not list payment providers, redirecting to FRONTEND_URL: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    return keys;
+    // resolving unregistered keys would log an error each, on every return
+    return [];
   } finally {
     clearTimeout(timer);
   }

@@ -237,6 +237,12 @@ const RECONCILE_RUN_LOCK_SECONDS = 15 * 60
 export const RECONCILE_RUN_BUDGET_MS = 10 * 60 * 1000
 /** Retried sessions get this much of the budget; the sweep keeps the rest. */
 export const RECONCILE_RETRY_BUDGET_MS = RECONCILE_RUN_BUDGET_MS / 2
+/**
+ * Reading pages may take this much of the budget; past it the run works on
+ * what it read and the next one continues after it, so slow reads cannot
+ * leave no time to process anything.
+ */
+export const RECONCILE_READ_BUDGET_MS = RECONCILE_RUN_BUDGET_MS / 5
 /** How often a run renews its lock. */
 const RECONCILE_LOCK_RENEW_MS = 60 * 1000
 
@@ -372,7 +378,13 @@ async function reconcileOnce(
       fields: candidateFields,
       filters: { ...windowFilters, id: startState.retry },
     })
-    paymentSessions.push(...((data ?? []) as ReconcileCandidate[]))
+    // in the saved order: sessions deferred last time come first
+    const order = new Map(startState.retry.map((id, index) => [id, index]))
+    paymentSessions.push(
+      ...((data ?? []) as ReconcileCandidate[]).sort(
+        (a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0),
+      ),
+    )
   }
   const retried = new Set(paymentSessions.map((session) => session.id))
   // Sweep order, for holding the cursor back (see the end of the run).
@@ -381,6 +393,15 @@ async function reconcileOnce(
   for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
     // Nothing processed yet: a run that lost the lock just leaves.
     if (!(await keepLock())) return
+
+    // Reads are slow: work on what was read, the next run reads on.
+    if (page > 0 && Date.now() - runStartedAt > RECONCILE_READ_BUDGET_MS) {
+      capped = true
+      logger.warn(
+        `[p24-reconcile] Read budget spent after ${paymentSessions.length} payment sessions; the next run resumes after session ${cursor?.id}`,
+      )
+      break
+    }
 
     const { data } = await query.graph({
       entity: 'payment_session',
@@ -419,6 +440,9 @@ async function reconcileOnce(
 
   let reconciled = 0
   const failed: string[] = []
+  // Retries left for later: first in line next run, so a few stuck ones
+  // cannot keep pushing a paid session back until it leaves the window.
+  const deferredRetries: string[] = []
 
   for (const [index, session] of paymentSessions.entries()) {
     // Another run holds the sweep now: it reads this state, so leave it.
@@ -441,7 +465,7 @@ async function reconcileOnce(
       retried.has(session.id) &&
       Date.now() - runStartedAt > RECONCILE_RETRY_BUDGET_MS
     ) {
-      failed.push(session.id)
+      deferredRetries.push(session.id)
       continue
     }
 
@@ -479,6 +503,10 @@ async function reconcileOnce(
       (sessionData.sessionId as string | undefined) ||
       session.id
 
+    // A capture can wait on P24 for minutes: the lease must outlast it.
+    const heartbeat = setInterval(() => {
+      void keepLock(true)
+    }, RECONCILE_LOCK_RENEW_MS)
     try {
       const providerId = session.provider_id as string
       const provider = resolvePaymentProviderById<P24TransactionStatusQueryProvider>(
@@ -533,6 +561,8 @@ async function reconcileOnce(
       logger.error(
         `[p24-reconcile] Failed to reconcile payment session ${session.id}: ${message}`,
       )
+    } finally {
+      clearInterval(heartbeat)
     }
   }
 
@@ -542,13 +572,14 @@ async function reconcileOnce(
   // Failures past the retry bound stay reachable by holding the cursor just
   // before the first of them that the sweep read: the next run reads it
   // (and what follows) again instead of leaving it behind until a wrap.
-  const retry = failed.slice(0, RECONCILE_MAX_RETRIES)
-  const omitted = new Set(failed.slice(RECONCILE_MAX_RETRIES))
+  const pending = [...deferredRetries, ...failed]
+  const retry = pending.slice(0, RECONCILE_MAX_RETRIES)
+  const omitted = new Set(pending.slice(RECONCILE_MAX_RETRIES))
   let nextCursor = capped ? cursor : null
   if (omitted.size) {
     const firstOmitted = swept.findIndex((row) => omitted.has(row.id))
     logger.warn(
-      `[p24-reconcile] ${failed.length} sessions failed; retrying ${retry.length} directly and re-reading the sweep from the first of the rest`,
+      `[p24-reconcile] ${pending.length} sessions left; retrying ${retry.length} directly and re-reading the sweep from the first of the rest`,
     )
     if (capped && firstOmitted !== -1) {
       const before = swept[firstOmitted - 1]

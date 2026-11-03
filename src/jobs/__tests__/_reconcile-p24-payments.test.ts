@@ -13,6 +13,7 @@ vi.mock("../../api/store/payments/utils/charge-helper", () => ({
 }));
 
 import reconcileP24PaymentsJob, {
+  RECONCILE_READ_BUDGET_MS,
   RECONCILE_RETRY_BUDGET_MS,
   RECONCILE_RUN_BUDGET_MS,
   resetReconcileMemoryState,
@@ -562,7 +563,106 @@ describe("reconcileP24PaymentsJob paging", () => {
           data: { cursor: null, retry: ["payses_retry_2"] },
         }),
       );
+
+      // the next run starts with the retry that waited, on a fresh budget
+      run.mockClear();
+      await reconcileP24PaymentsJob(container as any);
+      expect(run.mock.calls[0][0].input.data.session_id).toBe("payses_retry_2");
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("puts retries that waited ahead of those that failed again", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container, caching } = setupPages([
+        [
+          candidate({ id: "payses_stuck_1" }),
+          candidate({ id: "payses_stuck_2" }),
+          candidate({ id: "payses_paid" }),
+        ],
+      ]);
+      await caching.set({
+        key: "p24-reconcile:cursor",
+        data: {
+          cursor: null,
+          retry: ["payses_stuck_1", "payses_stuck_2", "payses_paid"],
+        },
+      });
+      // stuck_1 fails slowly; stuck_2 fails; paid waits for the next run
+      run
+        .mockImplementationOnce(async () => {
+          vi.setSystemTime(Date.now() + RECONCILE_RETRY_BUDGET_MS / 2);
+          throw new Error("P24 timed out");
+        })
+        .mockImplementationOnce(async () => {
+          vi.setSystemTime(Date.now() + RECONCILE_RETRY_BUDGET_MS / 2 + 1);
+          throw new Error("P24 timed out");
+        });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      expect(caching.set.mock.calls.at(-1)![0].data.retry).toEqual([
+        "payses_paid",
+        "payses_stuck_1",
+        "payses_stuck_2",
+      ]);
+    } finally {
+      run.mockReset();
+      run.mockResolvedValue({});
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops reading pages once the read budget is spent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container, graph, caching, rows } = setupPages(
+        Array.from({ length: 5 }, capturedPage),
+      );
+      const read = graph.getMockImplementation()!;
+      graph.mockImplementation(async (args: any) => {
+        vi.setSystemTime(Date.now() + RECONCILE_READ_BUDGET_MS / 2 + 1);
+        return read(args);
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      // two pages read, the cursor after the second for the next run
+      expect(graph).toHaveBeenCalledTimes(2);
+      expect(caching.set.mock.calls.at(-1)![0].data.cursor).toEqual({
+        updated_at: rows[99].updated_at,
+        id: rows[99].id,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps renewing the run lock while one capture waits on P24", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const { container } = setupPages([[candidate()]]);
+      const locking = {
+        acquire: vi.fn().mockResolvedValue(undefined),
+        release: vi.fn().mockResolvedValue(true),
+      };
+      const resolve = container.resolve;
+      container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+      run.mockImplementationOnce(async () => {
+        // three minutes inside one capture
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+        return {};
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      // the first acquire, three heartbeats, the renewal before the state write
+      expect(locking.acquire.mock.calls.length).toBeGreaterThanOrEqual(4);
+    } finally {
+      run.mockReset();
+      run.mockResolvedValue({});
       vi.useRealTimers();
     }
   });
