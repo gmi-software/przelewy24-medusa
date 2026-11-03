@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.9
 
 ### Breaking
 - `POST /payments/blik` (the legacy route outside `/store`) is removed. Use `POST /store/payments/blik/charge`
