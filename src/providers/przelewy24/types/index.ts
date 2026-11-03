@@ -12,6 +12,13 @@ export interface P24Options {
   frontend_url: string;
   backend_url: string;
   debug?: boolean;
+  /** Per-request timeout for P24 API calls, in ms. Default 20000. */
+  request_timeout_ms?: number;
+  /**
+   * Minutes (1–99) a hosted redirect / Visa Mobile transaction stays payable
+   * (P24 `timeLimit`). Unset or 0 keeps P24's default: no limit.
+   */
+  redirect_time_limit_minutes?: number;
 }
 
 export interface P24ServiceOptions extends P24Options {
@@ -51,6 +58,8 @@ export interface P24Transaction {
   urlCardPaymentNotification?: string;
   channel?: number;
   method?: number;
+  /** Minutes the customer has to pay; 0 or absent means no limit. */
+  timeLimit?: number;
   regulationAccept?: boolean;
   cardData?: P24CardData;
   additional?: {
@@ -244,6 +253,26 @@ export interface P24RefundResponseData {
     status: boolean;
     message: string;
   }>;
+  responseCode: number;
+}
+
+/** GET /refund/by/orderId/{orderId}: the refunds P24 holds for a transaction. */
+export interface P24RefundsByOrderIdResponse {
+  data: {
+    orderId: number;
+    sessionId: string;
+    amount: number;
+    currency: string;
+    refunds: Array<{
+      batchId: number;
+      requestId: string;
+      date: string;
+      login: string;
+      description: string;
+      status: number;
+      amount: number;
+    }>;
+  };
   responseCode: number;
 }
 

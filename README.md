@@ -96,6 +96,10 @@ module.exports = defineConfig({
 | `visa_mobile_method_id` | P24 method id for Visa Mobile                            | No       | `198`                   |
 | `frontend_url`          | Frontend URL for customer redirects                      | Yes      | -                       |
 | `backend_url`           | Backend URL for webhook notifications                    | Yes      | -                       |
+| `request_timeout_ms`    | Timeout for each P24 API request, in milliseconds        | No       | `20000`                 |
+| `redirect_time_limit_minutes` | Minutes (1–99) a hosted redirect / Visa Mobile transaction stays payable (P24 `timeLimit`); BLIK and cards are not limited | No | unset (no limit) |
+
+`redirect_time_limit_minutes` (sandbox, 2026-11-02): the countdown starts when the customer first opens the P24 payment page, not at registration, and reopening the link does not reset it. Once it runs out the link shows "Przekroczony czas na dokonanie transakcji" and cannot be paid. `transaction/by/sessionId` still answers "Transaction not found" for it; there is no expired status. The traditional bank transfer stays on offer; whether P24 accepts one booked after the limit is unconfirmed, so check with P24 before enabling it in production.
 
 ### Environment Variables
 
@@ -168,8 +172,6 @@ const blikResponse = await fetch("/store/payments/blik/charge", {
   }),
 });
 ```
-
-> Legacy route `POST /payments/blik` remains as a deprecated wrapper.
 
 #### Card Payment 2.0 (white-label iframe)
 
@@ -283,7 +285,7 @@ window.location.href = paymentSession.data.redirect_url;
 
 BLIK does not use redirect URLs.
 
-`urlStatus` is only called for paid transactions. When the customer rejects the payment in the banking app (or the bank declines it), P24 sends the additional BLIK notification to `{backend_url}/hooks/p24/blik-notification`; the plugin then marks the payment session `error`, so `complete` fails and `POST /store/payments/transaction/status` returns `status: "error"` instead of a pending payment. A BLIK token is single-use: `POST /store/payments/blik/charge` rejects sessions that were already charged or are no longer `pending`/`requires_more` — create a new payment session to retry. Charges and rejection notifications for one session are serialised through the Medusa Locking Module; with several Medusa instances, configure a shared locking provider such as `@medusajs/medusa/locking-redis`.
+`urlStatus` is only called for paid transactions. When the customer rejects the payment in the banking app (or the bank declines it), P24 sends the additional BLIK notification to `{backend_url}/hooks/p24/blik-notification`; the plugin then marks the payment session `error`, so `complete` fails and `POST /store/payments/transaction/status` returns `status: "error"` instead of a pending payment. A BLIK token is single-use: `POST /store/payments/blik/charge` rejects sessions that were already charged or are no longer `pending`/`requires_more` — create a new payment session to retry. When P24 does not answer the charge (timeout, connection error or 5xx) the route returns `502` and leaves the session `pending`, since P24 may have accepted it; poll the transaction status instead of charging again. `POST /store/payments/card/charge` applies the same lock and refuses a session that was already registered or paid. Charges and rejection notifications for one session are serialised through the Medusa Locking Module; with several Medusa instances, configure a shared locking provider such as `@medusajs/medusa/locking-redis`.
 
 ### 2. Cards (P24 Card 2.0 white-label)
 
@@ -319,6 +321,8 @@ See [P24 Card 2.0 docs](https://developers.przelewy24.pl/extended/index.php?pl#t
 | Capture + `completed_at`     | P24 webhook to `urlStatus`, or `reconcile-p24-payments` job (every 5 min)                                                                            |
 
 `authorizePayment` rejects a transaction with `amount_mismatch` when the amount P24 reports for it differs from the registered `amount_grosze`. `reconcile-p24-payments` skips such sessions.
+
+`reconcile-p24-payments` runs one sweep at a time across workers when they share a locking provider (Redis or Postgres): with the default in-memory provider each process holds its own lock and runs its own sweep, so with several instances configure a shared one. It holds the `p24-reconcile:run` lock for 15 minutes and renews it every minute, and a run stops taking sessions after 10 minutes. Its cursor is kept in the caching module (or the cache module); without either, it lives in process memory and a restart starts the sweep over. With `locking-postgres`, a worker killed mid-run leaves the lock row behind, and the provider never takes over an expired row from another owner. Once you are sure that no run is active, delete it: `DELETE FROM locking WHERE id = 'p24-reconcile:run' AND owner_id = '<owner>'`. Do not call `releaseAll()`: it truncates the whole table. Redis expires the lock on its own.
 
 **Do not** add a separate store “confirm” route to replace webhooks. Production capture is webhook-driven.
 

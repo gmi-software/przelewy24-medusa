@@ -52,6 +52,11 @@ class P24VisaMobileService extends P24Base {
   protected getProviderKey(): string {
     return PaymentProviderKeys.P24_VISA_MOBILE;
   }
+
+  protected getTransactionTimeLimit(): number | undefined {
+    const minutes = this.options.redirect_time_limit_minutes;
+    return minutes && minutes > 0 ? minutes : undefined;
+  }
 }
 
 export default P24VisaMobileService;

@@ -4,7 +4,10 @@ import {
   Modules,
 } from "@medusajs/framework/utils";
 
-import { P24ApiError } from "../../../../../utils/p24-api-error";
+import {
+  P24ApiError,
+  P24RequestError,
+} from "../../../../../utils/p24-api-error";
 import {
   assertBlikChargeMatchesPaymentSession,
   handleP24Charge,
@@ -442,6 +445,72 @@ describe("handleP24Charge failure handling", () => {
       error_endpoint: null,
       error_amount_grosze: 1234,
     });
+  });
+});
+
+describe("handleP24Charge with an unknown outcome", () => {
+  function buildReq() {
+    const logger = { error: vi.fn() };
+    const updatePaymentSession = vi.fn().mockResolvedValue({});
+    const paymentModule = {
+      retrievePaymentSession: vi.fn().mockResolvedValue({
+        id: "payses_1",
+        status: "pending",
+        data: { session_id: "payses_1", charge_submitted_at: "2026-11-02T10:00:00.000Z" },
+      }),
+      updatePaymentSession,
+    };
+    const req = {
+      scope: {
+        resolve: vi.fn((key: string) => {
+          if (key === ContainerRegistrationKeys.LOGGER) return logger;
+          if (key === ContainerRegistrationKeys.QUERY) {
+            return { graph: vi.fn().mockResolvedValue({ data: [] }) };
+          }
+          if (key === Modules.PAYMENT) return paymentModule;
+          throw new Error(`Unexpected key ${key}`);
+        }),
+      },
+    };
+
+    return { req, logger, updatePaymentSession };
+  }
+
+  it.each([
+    [
+      "a timeout",
+      new P24RequestError({
+        method: "POST",
+        endpoint: "/paymentMethod/blik/chargeByCode",
+        timeoutMs: 20000,
+        cause: new DOMException("timeout", "TimeoutError"),
+      }),
+    ],
+    [
+      "a P24 5xx",
+      new P24ApiError({
+        status: 502,
+        statusText: "Bad Gateway",
+        method: "POST",
+        endpoint: "/paymentMethod/blik/chargeByCode",
+        responseText: "",
+      }),
+    ],
+  ])("leaves the session pending after %s", async (_, error) => {
+    const { req, logger, updatePaymentSession } = buildReq();
+
+    await expect(
+      handleP24Charge({
+        req: req as never,
+        paymentSessionId: "payses_1",
+        execute: () => Promise.reject(error),
+      }),
+    ).rejects.toBe(error);
+
+    expect(updatePaymentSession).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("[p24-charge]"),
+    );
   });
 });
 

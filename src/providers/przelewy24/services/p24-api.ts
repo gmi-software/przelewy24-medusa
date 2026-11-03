@@ -9,6 +9,7 @@ import {
   P24PaymentMethodsResponse,
   P24RefundRequestData,
   P24RefundResponseData,
+  P24RefundsByOrderIdResponse,
   P24SignatureData,
   P24SignatureVerificationData,
   P24Transaction,
@@ -18,20 +19,36 @@ import {
   P24WebhookPayload,
 } from "../types";
 import { coerceSandbox } from "../../../utils/coerce-sandbox";
-import { P24ApiError } from "../../../utils/p24-api-error";
+import { P24ApiError, P24RequestError } from "../../../utils/p24-api-error";
 import { isAllowedP24WebhookSourceIp } from "../../../utils/p24-webhook-ips";
 
-export { P24ApiError };
+export { P24ApiError, P24RequestError };
+
+/** Without a signal, fetch waits for the OS socket timeout (minutes). */
+export const DEFAULT_P24_REQUEST_TIMEOUT_MS = 20_000;
+
+/** Largest delay a Node timer honours (2^31 - 1 ms). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export class P24ApiService {
   private readonly options: P24Options;
   private readonly baseURL: string;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: P24Options) {
     this.options = {
       ...options,
       sandbox: coerceSandbox(options.sandbox),
     };
+    const timeoutMs = Number(options.request_timeout_ms);
+    // AbortSignal.timeout throws on a fraction or above 2^32-1, and the timer
+    // clamps 2^31..2^32-1 to 1 ms: either way every request would fail.
+    this.requestTimeoutMs =
+      Number.isInteger(timeoutMs) &&
+      timeoutMs >= 1 &&
+      timeoutMs <= MAX_TIMER_DELAY_MS
+        ? timeoutMs
+        : DEFAULT_P24_REQUEST_TIMEOUT_MS;
     this.baseURL = this.options.sandbox
       ? "https://sandbox.przelewy24.pl/api/v1"
       : "https://secure.przelewy24.pl/api/v1";
@@ -74,6 +91,10 @@ export class P24ApiService {
 
     if (data.method != null) {
       requestData.method = data.method;
+    }
+
+    if (data.timeLimit != null && data.timeLimit > 0) {
+      requestData.timeLimit = data.timeLimit;
     }
 
     if (data.regulationAccept === true) {
@@ -162,6 +183,18 @@ export class P24ApiService {
   }
 
   /**
+   * Refunds P24 holds for a transaction (404 when there are none)
+   */
+  async getRefundsByOrderId(
+    orderId: number,
+  ): Promise<P24RefundsByOrderIdResponse> {
+    return this.makeRequest(
+      `/refund/by/orderId/${encodeURIComponent(String(orderId))}`,
+      "GET",
+    );
+  }
+
+  /**
    * Charge payment using BLIK code
    */
   async chargeBlikByCode(
@@ -208,16 +241,43 @@ export class P24ApiService {
       `${this.options.pos_id}:${this.options.api_key}`,
     ).toString("base64");
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Basic ${credentials}`,
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    let response: Response;
+    let responseText: string;
 
-    const responseText = await response.text();
+    try {
+      response = await fetch(url, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${credentials}`,
+        },
+        body: data ? JSON.stringify(data) : undefined,
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
+      });
+    } catch (error) {
+      throw new P24RequestError({
+        method,
+        endpoint,
+        timeoutMs: this.requestTimeoutMs,
+        cause: error,
+      });
+    }
+
+    try {
+      responseText = await response.text();
+    } catch (error) {
+      // A rejection is a rejection even when its body cannot be read; only
+      // an answer we cannot read on success leaves the outcome unknown.
+      if (response.ok) {
+        throw new P24RequestError({
+          method,
+          endpoint,
+          timeoutMs: this.requestTimeoutMs,
+          cause: error,
+        });
+      }
+      responseText = "";
+    }
 
     if (!response.ok) {
       throw new P24ApiError({

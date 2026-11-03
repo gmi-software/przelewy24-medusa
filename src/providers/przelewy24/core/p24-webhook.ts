@@ -7,6 +7,7 @@ import { PaymentActions } from "@medusajs/framework/utils";
 import { P24ApiService } from "../services/p24-api";
 import { P24WebhookPayload } from "../types";
 import { getAmountFromSmallestUnit } from "../../../utils/get-smallest-unit";
+import { P24ApiError } from "../../../utils/p24-api-error";
 import { createP24Logger, redactUnknown } from "../../../utils/p24-logger";
 
 import { fetchTransactionDetailsAndStatus } from "./p24-transaction-status";
@@ -134,9 +135,11 @@ export async function processP24Webhook(
           action: PaymentActions.SUCCESSFUL,
           data: webhookResultData,
         };
+      // Medusa's webhook subscriber runs processPaymentWorkflow for PENDING,
+      // which completes a cart that has no order yet.
       case "pending":
         return {
-          action: PaymentActions.PENDING,
+          action: PaymentActions.NOT_SUPPORTED,
           data: webhookResultData,
         };
       case "canceled":
@@ -161,6 +164,13 @@ export async function processP24Webhook(
         redactUnknown(rawData),
       )}`,
     );
+
+    // P24 already got its 200, so a FAILED result loses the notification.
+    // Throwing lets the event bus retry `payment.webhook_received`
+    // (`webhook_retries` attempts); only a 4xx from P24 cannot improve.
+    if (!(error instanceof P24ApiError) || error.status >= 500) {
+      throw error;
+    }
 
     try {
       const fallbackPayload = webhookData.data as unknown as P24WebhookPayload;

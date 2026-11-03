@@ -38,7 +38,8 @@ export function isExpectedStalePaymentJobFailure(error: unknown): boolean {
   const message = getJobErrorMessage(error).toLowerCase()
 
   return (
-    message.includes('404') ||
+    // a bare 404: "timed out after 4040ms" is a timeout, not a stale session
+    /\b404\b/.test(message) ||
     message.includes('not found') ||
     message.includes('400 bad request') ||
     message.includes('verification failed')

@@ -10,7 +10,10 @@ import {
   resolveP24Provider,
 } from "../../utils/charge-helper";
 import { PaymentProviderKeys } from "../../../../../providers/przelewy24/types";
-import { getP24UserFacingMessage } from "../../../../../utils/p24-api-error";
+import {
+  getP24UserFacingMessage,
+  isP24UnknownOutcomeError,
+} from "../../../../../utils/p24-api-error";
 import { withP24PaymentSessionLock } from "../../../../../utils/p24-payment-session-lock";
 
 const BLIK_PROVIDER_ID = `pp_${PaymentProviderKeys.P24_BLIK}_przelewy24`;
@@ -70,7 +73,9 @@ export async function POST(req: MedusaRequest, res: MedusaResponse) {
 
     return res.status(200).json(result);
   } catch (error) {
-    return res.status(400).json({
+    // 4xx tells the storefront the charge was refused; 502 that its outcome
+    // is unknown and the payment must be polled, not retried.
+    return res.status(isP24UnknownOutcomeError(error) ? 502 : 400).json({
       error: "BLIK payment failed",
       message: getP24UserFacingMessage(error, "BLIK payment failed"),
     });
