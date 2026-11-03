@@ -13,6 +13,7 @@ vi.mock("../../api/store/payments/utils/charge-helper", () => ({
 }));
 
 import reconcileP24PaymentsJob, {
+  RECONCILE_RETRY_BUDGET_MS,
   RECONCILE_RUN_BUDGET_MS,
   resetReconcileMemoryState,
 } from "../reconcile-p24-payments";
@@ -447,6 +448,84 @@ describe("reconcileP24PaymentsJob paging", () => {
       "p24-reconcile:run",
       { ownerId: locking.acquire.mock.calls[0][1].ownerId },
     );
+  });
+
+  it("renews the run lock as it goes and stops once it is lost", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container } = setupPages([
+        [
+          candidate({ id: "payses_a" }),
+          candidate({ id: "payses_b" }),
+          candidate({ id: "payses_c" }),
+        ],
+      ]);
+      const locking = {
+        acquire: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new Error("lock taken over")),
+        release: vi.fn().mockResolvedValue(true),
+      };
+      const resolve = container.resolve;
+      container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+      // each capture takes two minutes
+      run.mockImplementation(async () => {
+        vi.setSystemTime(Date.now() + 2 * 60_000);
+        return {};
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      const { ownerId } = locking.acquire.mock.calls[0][1];
+      expect(locking.acquire.mock.calls.map(([, args]) => args.ownerId)).toEqual([
+        ownerId,
+        ownerId,
+        ownerId,
+      ]);
+      // a, b (after renewing), then the renewal before c fails
+      expect(run).toHaveBeenCalledTimes(2);
+    } finally {
+      run.mockReset();
+      run.mockResolvedValue({});
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves slow retries for later so the sweep still runs", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container, caching } = setupPages([
+        [
+          candidate({ id: "payses_retry_1" }),
+          candidate({ id: "payses_retry_2" }),
+          candidate({ id: "payses_new" }),
+        ],
+      ]);
+      await caching.set({
+        key: "p24-reconcile:cursor",
+        data: { cursor: null, retry: ["payses_retry_1", "payses_retry_2"] },
+      });
+      run.mockImplementationOnce(async () => {
+        vi.setSystemTime(Date.now() + RECONCILE_RETRY_BUDGET_MS + 1);
+        return {};
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      expect(run.mock.calls.map(([arg]) => arg.input.data.session_id)).toEqual([
+        "payses_retry_1",
+        "payses_new",
+      ]);
+      expect(caching.set).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: { cursor: null, retry: ["payses_retry_2"] },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reads a state saved by the previous version as a bare cursor", async () => {

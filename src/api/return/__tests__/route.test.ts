@@ -30,7 +30,7 @@ function setup(
       resolve: vi.fn((key: string) => {
         if (key === Modules.PAYMENT) return paymentModule;
         if (key === ContainerRegistrationKeys.LOGGER) {
-          return { info: vi.fn(), error: vi.fn() };
+          return { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
         }
         throw new Error(`Unexpected key ${key}`);
       }),
@@ -44,6 +44,29 @@ function setup(
 describe("GET /return", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("does not keep the customer waiting on a stuck provider lookup", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv("FRONTEND_URL", "https://env.example.com");
+      const { req, res } = setup({ sessionId: "payses_1", status: "ok" }, {});
+      const paymentModule = req.scope.resolve(Modules.PAYMENT) as {
+        listPaymentProviders: ReturnType<typeof vi.fn>;
+      };
+      paymentModule.listPaymentProviders.mockReturnValue(new Promise(() => {}));
+
+      const pending = GET(req as never, res as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      await pending;
+
+      expect(res.redirect).toHaveBeenCalledWith(
+        302,
+        expect.stringContaining("https://env.example.com/payment/return"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resolves only the P24 providers the project registered", async () => {

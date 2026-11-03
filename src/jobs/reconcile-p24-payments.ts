@@ -42,6 +42,7 @@ const EMPTY_STATE: ReconcileState = { cursor: null, retry: [] }
 
 // This process's copy: the store when no cache module is registered, the
 // fallback when the cache cannot be read. Lost on restart.
+let warnedMemoryOnly = false
 let memoryState: ReconcileState = EMPTY_STATE
 
 /** Tests only: each test starts from an empty sweep. */
@@ -113,6 +114,14 @@ export const resolveCursorStore = (
     }
   }
 
+  if (!warnedMemoryOnly) {
+    warnedMemoryOnly = true
+    container
+      .resolve(ContainerRegistrationKeys.LOGGER)
+      .warn(
+        '[p24-reconcile] No caching or cache module is registered: the sweep cursor lives in process memory, so a restart starts over at the oldest session',
+      )
+  }
   return {
     get: async () => memoryState,
     set: async (state) => {
@@ -220,11 +229,16 @@ const RECONCILE_RUN_LOCK_KEY = 'p24-reconcile:run'
 /** Longer than any run; released at the end, so it only matters on a crash. */
 const RECONCILE_RUN_LOCK_SECONDS = 15 * 60
 /**
- * When a run stops taking sessions, so it ends inside the run lock even with
- * P24 timing out on every call: the last one may still take a capture's
- * worth of P24 calls (about 2.5 min) after it.
+ * When a run stops taking sessions, counted from its start (page reads
+ * included): the last one may still take a capture's worth of P24 calls
+ * (about 2.5 min) after it. The run lock is renewed meanwhile, so a slower
+ * run never shares the sweep with the next tick.
  */
 export const RECONCILE_RUN_BUDGET_MS = 10 * 60 * 1000
+/** Retried sessions get this much of the budget; the sweep keeps the rest. */
+export const RECONCILE_RETRY_BUDGET_MS = RECONCILE_RUN_BUDGET_MS / 2
+/** How often a run renews its lock. */
+const RECONCILE_LOCK_RENEW_MS = 60 * 1000
 
 type RunLock = {
   acquire: (key: string, args: { ownerId: string; expire: number }) => Promise<unknown>
@@ -252,7 +266,7 @@ export default async function reconcileP24PaymentsJob(
   }
 
   if (!locking) {
-    return reconcileOnce(container)
+    return reconcileOnce(container, async () => true)
   }
 
   const ownerId = `p24-reconcile:${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
@@ -268,8 +282,29 @@ export default async function reconcileP24PaymentsJob(
     return
   }
 
+  // The same owner acquiring again extends the lease (Redis, Postgres and the
+  // in-memory provider alike); false once the lock is gone, so the run stops.
+  const lock = locking
+  let renewedAt = Date.now()
+  const keepLock = async () => {
+    if (Date.now() - renewedAt < RECONCILE_LOCK_RENEW_MS) return true
+    try {
+      await lock.acquire(RECONCILE_RUN_LOCK_KEY, {
+        ownerId,
+        expire: RECONCILE_RUN_LOCK_SECONDS,
+      })
+      renewedAt = Date.now()
+      return true
+    } catch (error) {
+      logger.warn(
+        `[p24-reconcile] Lost the run lock; stopping this run: ${getJobErrorMessage(error)}`,
+      )
+      return false
+    }
+  }
+
   try {
-    await reconcileOnce(container)
+    await reconcileOnce(container, keepLock)
   } finally {
     await locking
       .release(RECONCILE_RUN_LOCK_KEY, { ownerId })
@@ -279,9 +314,13 @@ export default async function reconcileP24PaymentsJob(
   }
 }
 
-async function reconcileOnce(container: MedusaContainer) {
+async function reconcileOnce(
+  container: MedusaContainer,
+  keepLock: () => Promise<boolean>,
+) {
   const logger = container.resolve(ContainerRegistrationKeys.LOGGER)
   const query = container.resolve(ContainerRegistrationKeys.QUERY)
+  const runStartedAt = Date.now()
 
   const cutoff = new Date(Date.now() - RECONCILE_AFTER_MINUTES * 60 * 1000)
   const maxAge = new Date(
@@ -372,18 +411,30 @@ async function reconcileOnce(container: MedusaContainer) {
 
   let reconciled = 0
   const failed: string[] = []
-  const runStartedAt = Date.now()
 
   for (const [index, session] of paymentSessions.entries()) {
-    // Out of time: what is left counts as failed, so the retry list and the
-    // held-back cursor below bring it into the next run.
-    if (Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS) {
+    // Out of time, or the lock is gone: what is left counts as failed, so the
+    // retry list and the held-back cursor below bring it into the next run.
+    if (
+      Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS ||
+      !(await keepLock())
+    ) {
       const left = paymentSessions.slice(index).map((row) => row.id)
       logger.warn(
         `[p24-reconcile] Run budget spent; leaving ${left.length} session(s) for the next run`,
       )
       failed.push(...left)
       break
+    }
+
+    // Retries come first; past their share they wait, so slow ones never keep
+    // the sweep from newer sessions.
+    if (
+      retried.has(session.id) &&
+      Date.now() - runStartedAt > RECONCILE_RETRY_BUDGET_MS
+    ) {
+      failed.push(session.id)
+      continue
     }
 
     const sessionData = (session.data ?? {}) as Record<string, unknown>

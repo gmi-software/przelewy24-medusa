@@ -322,6 +322,8 @@ See [P24 Card 2.0 docs](https://developers.przelewy24.pl/extended/index.php?pl#t
 
 `authorizePayment` rejects a transaction with `amount_mismatch` when the amount P24 reports for it differs from the registered `amount_grosze`. `reconcile-p24-payments` skips such sessions.
 
+`reconcile-p24-payments` runs one sweep at a time across workers. It holds the `p24-reconcile:run` lock for 15 minutes and renews it every minute, and a run stops taking sessions after 10 minutes. Its cursor is kept in the caching module (or the cache module); without either, it lives in process memory and a restart starts the sweep over. With `locking-postgres`, a worker killed mid-run leaves the lock row behind, and the provider never takes over an expired row from another owner. Once you are sure that no run is active, delete it: `DELETE FROM locking WHERE id = 'p24-reconcile:run' AND owner_id = '<owner>'`. Do not call `releaseAll()`: it truncates the whole table. Redis expires the lock on its own.
+
 **Do not** add a separate store “confirm” route to replace webhooks. Production capture is webhook-driven.
 
 ---

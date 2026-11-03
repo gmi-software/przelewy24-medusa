@@ -175,6 +175,29 @@ describe("P24Base – amount conversion", () => {
       }
     });
 
+    it("fails for a request P24 holds as rejected (status 4)", async () => {
+      provider["p24Api"].processRefund = vi.fn().mockRejectedValue(timedOut());
+      provider["p24Api"].getRefundsByOrderId = vi.fn().mockResolvedValue({
+        data: {
+          orderId: 1,
+          refunds: [{ requestId: "refund-key-lost", amount: 3000, status: 4 }],
+        },
+      });
+
+      await expect(provider.refundPayment(refundInput)).rejects.toThrow();
+    });
+
+    it("says the outcome is unknown when P24 cannot be asked", async () => {
+      provider["p24Api"].processRefund = vi.fn().mockRejectedValue(timedOut());
+      provider["p24Api"].getRefundsByOrderId = vi
+        .fn()
+        .mockRejectedValue(new Error("socket hang up"));
+
+      await expect(provider.refundPayment(refundInput)).rejects.toThrow(
+        /unknown outcome.*Check the P24 panel/,
+      );
+    });
+
     it("does not look anything up for a refund P24 refused", async () => {
       provider["p24Api"].processRefund = vi.fn().mockRejectedValue(
         new P24ApiError({

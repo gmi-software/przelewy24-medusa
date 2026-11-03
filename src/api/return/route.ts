@@ -7,20 +7,41 @@ import {
   PaymentProviderKeys,
 } from "../../providers/przelewy24/types";
 
+const PROVIDER_LOOKUP_TIMEOUT_MS = 2000;
+
 /**
  * The P24 providers this project registered. Resolving one that is not makes
  * Medusa log an error first, on every return.
  */
 async function registeredProviderKeys(req: MedusaRequest): Promise<string[]> {
   const keys = Object.values(PaymentProviderKeys);
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const registered = await req.scope
-      .resolve(Modules.PAYMENT)
-      .listPaymentProviders({ id: keys.map((key) => `pp_${key}_przelewy24`) });
+    // The customer is waiting on this redirect: a stuck query must not hold it.
+    const registered = await Promise.race([
+      req.scope
+        .resolve(Modules.PAYMENT)
+        .listPaymentProviders({ id: keys.map((key) => `pp_${key}_przelewy24`) }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`timed out after ${PROVIDER_LOOKUP_TIMEOUT_MS}ms`)),
+          PROVIDER_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
     const ids = new Set(registered.map((provider) => provider.id));
     return keys.filter((key) => ids.has(`pp_${key}_przelewy24`));
-  } catch {
+  } catch (error) {
+    req.scope
+      .resolve(ContainerRegistrationKeys.LOGGER)
+      .warn(
+        `P24 return: could not list payment providers, trying every P24 key: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     return keys;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

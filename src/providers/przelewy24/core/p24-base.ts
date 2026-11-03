@@ -77,6 +77,8 @@ type P24Container = Record<string, unknown> & {
 
 /** P24 `status` of a transaction this merchant has verified. */
 const P24_VERIFIED_STATUS = 2;
+/** P24's status of a refund it rejected (GET /refund/by/orderId). */
+const P24_REFUND_REJECTED_STATUS = 4;
 
 type PaymentSessionQuery = {
   graph: (config: {
@@ -785,6 +787,14 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       if (!mayBeTaken) throw error;
 
       const accepted = await this.findRefundRequest(orderId, refundData.requestId);
+      if (accepted === "unknown") {
+        // Thrown, Medusa drops the refund; say so plainly, so nobody retries
+        // before looking at the P24 panel.
+        throw this.buildError(
+          `Refund ${refundData.requestId} of P24 order ${orderId} has an unknown outcome: P24 did not answer and could not be asked whether it took it. Check the P24 panel before refunding again`,
+          error,
+        );
+      }
       if (!accepted) throw error;
 
       this.logger_.warn(
@@ -809,18 +819,25 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
     }
   }
 
-  /** The refund P24 holds under `requestId`, or null (none, or no answer). */
+  /**
+   * The refund P24 holds under `requestId` and has not rejected; null when it
+   * holds none (a 404 means the order has no refunds), "unknown" when P24
+   * could not be asked.
+   */
   private async findRefundRequest(orderId: number, requestId: string) {
     try {
       const { data } = await this.p24Api.getRefundsByOrderId(orderId);
-      return (
-        data?.refunds?.find((refund) => refund?.requestId === requestId) ?? null
-      );
+      const refund =
+        data?.refunds?.find((row) => row?.requestId === requestId) ?? null;
+      return refund && refund.status !== P24_REFUND_REJECTED_STATUS ? refund : null;
     } catch (lookupError) {
+      if (lookupError instanceof P24ApiError && lookupError.status === 404) {
+        return null;
+      }
       this.logger_.warn(
         `Could not look up P24 refunds of order ${orderId}: ${getJobErrorMessage(lookupError)}`,
       );
-      return null;
+      return "unknown" as const;
     }
   }
 
