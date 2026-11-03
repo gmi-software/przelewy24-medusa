@@ -443,6 +443,34 @@ describe("reconcileP24PaymentsJob paging", () => {
     expect(processed.has(rows[1999].id)).toBe(true);
   });
 
+  it("keeps the sessions closest to the window cutoff when failures pass the retry bound", async () => {
+    const { container, caching, rows } = setupPages(
+      Array.from({ length: 42 }, () =>
+        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
+      ),
+    );
+    // the saved retries are younger than what the sweep reads next (it wrapped)
+    caching.get.mockResolvedValueOnce({
+      cursor: { updated_at: rows[99].updated_at, id: rows[99].id },
+      retry: rows.slice(1100, 2100).map((row) => row.id),
+    });
+    failExcept(new Set());
+
+    await reconcileP24PaymentsJob(container as any);
+
+    // rows[100] is the oldest one swept, the nearest to leaving the window
+    const state = caching.set.mock.calls.at(-1)![0].data;
+    expect(state.retry).toHaveLength(1000);
+    expect(state.retry).toContain(rows[100].id);
+    expect(state.retry).not.toContain(rows[2099].id);
+
+    // read again directly by the next run, before any wrap
+    run.mockReset();
+    run.mockResolvedValue({});
+    await reconcileP24PaymentsJob(container as any);
+    expect(run.mock.calls[0][0].input.data.session_id).toBe(rows[100].id);
+  });
+
   it("does not release the run lock under a renewal still in flight", async () => {
     const { container } = setupPages([[candidate()]]);
     const events: string[] = [];

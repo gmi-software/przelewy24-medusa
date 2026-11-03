@@ -597,9 +597,24 @@ async function reconcileOnce(
   // A hold must move the cursor: when the first row past it fails again, the
   // sweep moves on and the rest wait for the wrap, so failing sessions never
   // keep the sweep from the ones behind them.
+  // Past the bound the oldest sessions keep their slots: they leave the
+  // 48-hour window first, and each is read again every run until it does.
+  // Those left out are the youngest, with the most time for the wrap.
   const pending = [...deferredRetries, ...failed]
-  const retry = pending.slice(0, RECONCILE_MAX_RETRIES)
-  const omitted = new Set(pending.slice(RECONCILE_MAX_RETRIES))
+  const updatedAt = new Map(
+    paymentSessions.map((session) => [
+      session.id,
+      toIso((session as { updated_at?: unknown }).updated_at),
+    ]),
+  )
+  const kept = new Set(
+    [...pending]
+      .sort((a, b) => (updatedAt.get(a) ?? '').localeCompare(updatedAt.get(b) ?? ''))
+      .slice(0, RECONCILE_MAX_RETRIES),
+  )
+  // in run order, so the deferred retries still come first
+  const retry = pending.filter((id) => kept.has(id))
+  const omitted = new Set(pending.filter((id) => !kept.has(id)))
   let nextCursor = capped ? cursor : null
   if (omitted.size) {
     const firstOmitted = swept.findIndex((row) => omitted.has(row.id))
