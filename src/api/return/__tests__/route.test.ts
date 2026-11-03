@@ -89,12 +89,18 @@ describe("GET /return", () => {
       const second = GET(req as never, res as never);
       await vi.advanceTimersByTimeAsync(2000);
       await Promise.all([first, second]);
+      // still pending well past the redirect timeout: not asked again
+      await vi.advanceTimersByTimeAsync(60_000);
+      const third = GET(req as never, res as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      await third;
+      expect(paymentModule.listPaymentProviders).toHaveBeenCalledTimes(1);
       answer([]);
       await vi.advanceTimersByTimeAsync(0);
       await GET(req as never, res as never);
 
       expect(paymentModule.listPaymentProviders).toHaveBeenCalledTimes(1);
-      expect(res.redirect).toHaveBeenCalledTimes(3);
+      expect(res.redirect).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

@@ -16,7 +16,7 @@
 - Every P24 call has a timeout (`request_timeout_ms`, integer 1–2^31-1, default 20 s); a call with no answer is an unknown outcome, not a refusal
 - Capture skips verify for a transaction P24 already reports verified, and retries verify on an unknown outcome
 - A timeout whose message contains `404` (e.g. `request_timeout_ms` 4040) is no longer taken for a stale session
-- `GET /return` resolves only registered P24 providers, so it no longer logs an error per missing one; the lookup runs once per process (shared while pending) and is bounded to 2 s for the customer
+- `GET /return` resolves only registered P24 providers, so it no longer logs an error per missing one; the lookup runs once per process (shared while pending, asked again only after an error) and is bounded to 2 s for the customer
 
 ### Added
 - `redirect_time_limit_minutes` (1–99, off by default) sends P24's `timeLimit` for hosted redirect and Visa Mobile transactions, so an abandoned link cannot be paid next to a newer attempt

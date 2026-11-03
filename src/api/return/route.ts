@@ -8,19 +8,14 @@ import {
 } from "../../providers/przelewy24/types";
 
 const PROVIDER_LOOKUP_TIMEOUT_MS = 2000;
-/** A lookup still pending this long is given up on and the next return asks again. */
-const PROVIDER_LOOKUP_RETRY_MS = 30_000;
-
-type ProviderLookup = {
-  ids: Promise<Set<string>>;
-  startedAt: number;
-  settled: boolean;
-};
+type ProviderLookup = Promise<Set<string>>;
 
 /**
  * Registered providers do not change while the app runs: one lookup per
- * payment module, shared by concurrent returns, so a stalled database holds
- * at most one connection for it instead of one per customer coming back.
+ * payment module, shared by concurrent returns and kept once it succeeds.
+ * A pending one is never replaced (the query cannot be canceled), so a
+ * stalled database holds at most one connection for it; it is asked again
+ * only after the database answers with an error.
  */
 const providerLookups = new WeakMap<object, ProviderLookup>();
 
@@ -28,34 +23,24 @@ function lookupProviderIds(paymentModule: {
   listPaymentProviders: (filters: { id: string[] }) => Promise<{ id: string }[]>;
 }): Promise<Set<string>> {
   const cached = providerLookups.get(paymentModule);
-  if (
-    cached &&
-    (cached.settled || Date.now() - cached.startedAt < PROVIDER_LOOKUP_RETRY_MS)
-  ) {
-    return cached.ids;
+  if (cached) {
+    return cached;
   }
 
-  const lookup: ProviderLookup = {
-    startedAt: Date.now(),
-    settled: false,
-    ids: paymentModule
-      .listPaymentProviders({
-        id: Object.values(PaymentProviderKeys).map((key) => `pp_${key}_przelewy24`),
-      })
-      .then((providers) => {
-        lookup.settled = true;
-        return new Set(providers.map((provider) => provider.id));
-      })
-      .catch((error) => {
-        // failures are not kept: the next return asks again
-        if (providerLookups.get(paymentModule) === lookup) {
-          providerLookups.delete(paymentModule);
-        }
-        throw error;
-      }),
-  };
+  const lookup: ProviderLookup = paymentModule
+    .listPaymentProviders({
+      id: Object.values(PaymentProviderKeys).map((key) => `pp_${key}_przelewy24`),
+    })
+    .then((providers) => new Set(providers.map((provider) => provider.id)))
+    .catch((error) => {
+      // failures are not kept: the next return asks again
+      if (providerLookups.get(paymentModule) === lookup) {
+        providerLookups.delete(paymentModule);
+      }
+      throw error;
+    });
   providerLookups.set(paymentModule, lookup);
-  return lookup.ids;
+  return lookup;
 }
 
 /**
