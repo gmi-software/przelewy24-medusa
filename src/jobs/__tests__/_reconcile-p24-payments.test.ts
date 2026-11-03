@@ -12,7 +12,10 @@ vi.mock("../../api/store/payments/utils/charge-helper", () => ({
   resolvePaymentProviderById: () => ({ queryTransactionStatus }),
 }));
 
-import reconcileP24PaymentsJob, { resetReconcileMemoryState } from "../reconcile-p24-payments";
+import reconcileP24PaymentsJob, {
+  RECONCILE_RUN_BUDGET_MS,
+  resetReconcileMemoryState,
+} from "../reconcile-p24-payments";
 
 const setup = (paidGrosze: number) => {
   run.mockClear();
@@ -196,6 +199,25 @@ describe("reconcileP24PaymentsJob paging", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("asks P24 about a card registration whose answer never came", async () => {
+    const { container } = setupPages([
+      [
+        candidate({
+          data: {
+            session_id: SESSION_ID,
+            pending_card_tokenization: true,
+            charge_submitted_at: minute(0),
+            currency_code: "pln",
+          },
+        }),
+      ],
+    ]);
+
+    await reconcileP24PaymentsJob(container as any);
+
+    expect(queryTransactionStatus).toHaveBeenCalledWith(SESSION_ID);
+  });
+
   it("reconciles an errored session only when its charge was submitted", async () => {
     const { container, graph } = setupPages([
       [
@@ -328,6 +350,39 @@ describe("reconcileP24PaymentsJob paging", () => {
     expect(caching.set).toHaveBeenLastCalledWith(
       expect.objectContaining({ data: { cursor: null, retry: ["payses_first"] } }),
     );
+  });
+
+  it("leaves what is left past the run budget for the next run", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container, caching, logger } = setupPages([
+        [
+          candidate({ id: "payses_a" }),
+          candidate({ id: "payses_b" }),
+          candidate({ id: "payses_c" }),
+        ],
+      ]);
+      // P24 so slow that the first capture spends the whole budget
+      run.mockImplementationOnce(async () => {
+        vi.setSystemTime(Date.now() + RECONCILE_RUN_BUDGET_MS + 1);
+        return {};
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Run budget spent"),
+      );
+      expect(caching.set).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: { cursor: null, retry: ["payses_b", "payses_c"] },
+          options: { autoInvalidate: false },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("holds the cursor before the first failure past the retry bound", async () => {

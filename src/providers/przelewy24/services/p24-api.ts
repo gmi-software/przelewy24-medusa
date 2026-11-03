@@ -9,6 +9,7 @@ import {
   P24PaymentMethodsResponse,
   P24RefundRequestData,
   P24RefundResponseData,
+  P24RefundsByOrderIdResponse,
   P24SignatureData,
   P24SignatureVerificationData,
   P24Transaction,
@@ -179,6 +180,18 @@ export class P24ApiService {
     refundData: P24RefundRequestData,
   ): Promise<P24RefundResponseData> {
     return this.makeRequest("/transaction/refund", "POST", refundData);
+  }
+
+  /**
+   * Refunds P24 holds for a transaction (404 when there are none)
+   */
+  async getRefundsByOrderId(
+    orderId: number,
+  ): Promise<P24RefundsByOrderIdResponse> {
+    return this.makeRequest(
+      `/refund/by/orderId/${encodeURIComponent(String(orderId))}`,
+      "GET",
+    );
   }
 
   /**

@@ -46,6 +46,19 @@ describe('isExpectedStalePaymentJobFailure', () => {
     ).toBe(true)
   })
 
+  it('reads a 404 response as stale, a timeout of 4040 ms as not', () => {
+    expect(
+      isExpectedStalePaymentJobFailure(
+        new Error('P24 API request failed: 404 Not Found'),
+      ),
+    ).toBe(true)
+    expect(
+      isExpectedStalePaymentJobFailure(
+        new Error('GET /transaction/by/sessionId timed out after 4040ms'),
+      ),
+    ).toBe(false)
+  })
+
   it('treats unexpected failures as unexpected', () => {
     expect(
       isExpectedStalePaymentJobFailure(new Error('Delivery slot unavailable')),

@@ -14,6 +14,8 @@ import {
 import {
   P24Options,
   P24PaymentIntentOptions,
+  P24RefundRequestData,
+  P24RefundResponseData,
   P24Transaction,
   P24TransactionBySessionIdResponse,
 } from "../types";
@@ -42,7 +44,10 @@ import {
 } from "../../../utils/p24-payment-methods";
 import { createP24Logger, redactUnknown } from "../../../utils/p24-logger";
 import { buildLocalizedP24ErrorMessage } from "../../../utils/p24-errors";
-import { isP24UnknownOutcomeError } from "../../../utils/p24-api-error";
+import {
+  isP24UnknownOutcomeError,
+  P24ApiError,
+} from "../../../utils/p24-api-error";
 import { getJobErrorMessage } from "../../../utils/payment-job-errors";
 
 import {
@@ -706,7 +711,7 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
         refundsUuid,
       };
 
-      const refundResult = await this.p24Api.processRefund(refundData);
+      const refundResult = await this.processRefundOnce(refundData, orderId);
       const refundStatus = refundResult.data[0]?.status;
       const refundMessage = refundResult.data[0]?.message;
 
@@ -757,6 +762,65 @@ abstract class P24Base extends AbstractPaymentProvider<P24Options> {
       };
     } catch (e) {
       throw this.buildError("An error occurred in refundPayment", e);
+    }
+  }
+
+  /**
+   * A refund whose answer never came (timeout, 5xx), or that P24 calls a
+   * conflict, may have been taken all the same. Thrown as a failure, Medusa
+   * deletes its refund and a retry sends a new request id P24 cannot
+   * deduplicate: the customer is refunded twice. So P24 is asked whether it
+   * holds this request id before the failure stands.
+   */
+  private async processRefundOnce(
+    refundData: P24RefundRequestData,
+    orderId: number,
+  ): Promise<P24RefundResponseData> {
+    try {
+      return await this.p24Api.processRefund(refundData);
+    } catch (error) {
+      const mayBeTaken =
+        isP24UnknownOutcomeError(error) ||
+        (error instanceof P24ApiError && error.status === 409);
+      if (!mayBeTaken) throw error;
+
+      const accepted = await this.findRefundRequest(orderId, refundData.requestId);
+      if (!accepted) throw error;
+
+      this.logger_.warn(
+        `P24 refund ${refundData.requestId} of order ${orderId} failed (${getJobErrorMessage(
+          error,
+        )}) but P24 holds it; treating it as requested`,
+      );
+      const [refund] = refundData.refunds;
+      return {
+        responseCode: 0,
+        data: [
+          {
+            orderId,
+            sessionId: refund?.sessionId ?? "",
+            amount: accepted.amount,
+            description: accepted.description,
+            status: true,
+            message: "confirmed by refund lookup",
+          },
+        ],
+      };
+    }
+  }
+
+  /** The refund P24 holds under `requestId`, or null (none, or no answer). */
+  private async findRefundRequest(orderId: number, requestId: string) {
+    try {
+      const { data } = await this.p24Api.getRefundsByOrderId(orderId);
+      return (
+        data?.refunds?.find((refund) => refund?.requestId === requestId) ?? null
+      );
+    } catch (lookupError) {
+      this.logger_.warn(
+        `Could not look up P24 refunds of order ${orderId}: ${getJobErrorMessage(lookupError)}`,
+      );
+      return null;
     }
   }
 

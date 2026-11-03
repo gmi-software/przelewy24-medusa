@@ -256,6 +256,26 @@ export interface P24RefundResponseData {
   responseCode: number;
 }
 
+/** GET /refund/by/orderId/{orderId}: the refunds P24 holds for a transaction. */
+export interface P24RefundsByOrderIdResponse {
+  data: {
+    orderId: number;
+    sessionId: string;
+    amount: number;
+    currency: string;
+    refunds: Array<{
+      batchId: number;
+      requestId: string;
+      date: string;
+      login: string;
+      description: string;
+      status: number;
+      amount: number;
+    }>;
+  };
+  responseCode: number;
+}
+
 export interface BlikOptions extends P24ServiceOptions {
   enable_one_click?: boolean;
 }

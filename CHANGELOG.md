@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+- `POST /payments/blik` (the legacy route outside `/store`) is removed. Use `POST /store/payments/blik/charge`
+- `POST /store/payments/card/charge` charges a payment session once. A successful registration, or one whose outcome is unknown, stamps `charge_submitted_at`, and any later call on that session answers 400 `Payment session was already charged`. A storefront that lets the customer try another card must create a new payment session (after the old attempt is settled or has failed)
+- BLIK and card charges whose outcome is unknown (timeout, 5xx) answer 502 instead of 400 and leave the session pending: poll its status rather than charging again
+- The payment webhook answers `NOT_SUPPORTED` instead of `PENDING` for P24 status 0, so Medusa does not complete the cart through core `completeCartWorkflow`, and rethrows transient errors so the event bus can retry. With `event-bus-local` there is no retry: `reconcile-p24-payments` remains the safety net
+- `GET /return` redirects to the `frontend_url` of the first registered P24 provider, falling back to `FRONTEND_URL`
+
+### Fixed
+- Refunds sent `amount: null` to P24: Medusa passes `refund.raw_amount` (`{ value, precision }`), which `Number()` turns into NaN. The raw value is converted to grosze
+- A refund that times out, gets a 5xx or a 409 is looked up with `GET /refund/by/orderId/{orderId}` before it fails. When P24 holds its `requestId` it is reported as requested; before, Medusa deleted the refund and a retry with a new request id refunded the customer twice
+- `reconcile-p24-payments` reaches every candidate session: a keyset cursor (`updated_at`, `id`) kept in the caching module (not auto-invalidated), failed sessions retried first (up to 200), the cursor advanced only past processed sessions, one run at a time across workers (locking module), and a 10-minute run budget inside the 15-minute run lock. A card registration whose answer never came is reconciled too
+- Every P24 call has a timeout (`request_timeout_ms`, integer 1–2^31-1, default 20 s); a call with no answer is an unknown outcome, not a refusal
+- Capture skips verify for a transaction P24 already reports verified, and retries verify on an unknown outcome
+- A timeout whose message contains `404` (e.g. `request_timeout_ms` 4040) is no longer taken for a stale session
+- `GET /return` resolves only registered P24 providers, so it no longer logs an error per missing one
+
+### Added
+- `redirect_time_limit_minutes` (1–99, off by default) sends P24's `timeLimit` for hosted redirect and Visa Mobile transactions, so an abandoned link cannot be paid next to a newer attempt
+
 ## 0.1.8
 
 ### Changed

@@ -128,6 +128,72 @@ describe("P24Base – amount conversion", () => {
     expect(result.data?.refund_amount).toBe(30.5);
   });
 
+  describe("refundPayment with an unknown outcome", () => {
+    const refundInput = {
+      data: { session_id: "session-123", order_id: 1, currency: "PLN" },
+      amount: 30,
+      context: { idempotency_key: "refund-key-lost" },
+    } as any;
+    const timedOut = () =>
+      new P24RequestError({
+        method: "POST",
+        endpoint: "/transaction/refund",
+        timeoutMs: 20_000,
+        cause: Object.assign(new Error("aborted"), { name: "TimeoutError" }),
+      });
+
+    it("reports a refund P24 took although the answer never came", async () => {
+      provider["p24Api"].processRefund = vi.fn().mockRejectedValue(timedOut());
+      const lookup = vi.fn().mockResolvedValue({
+        responseCode: 0,
+        data: {
+          orderId: 1,
+          refunds: [
+            { requestId: "other", amount: 1000, status: 0 },
+            { requestId: "refund-key-lost", amount: 3000, status: 3 },
+          ],
+        },
+      });
+      provider["p24Api"].getRefundsByOrderId = lookup;
+
+      const result = await provider.refundPayment(refundInput);
+
+      expect(lookup).toHaveBeenCalledWith(1);
+      expect(result.data?.status).toBe("refund_requested");
+      expect(result.data?.refund_request_id).toBe("refund-key-lost");
+    });
+
+    it("fails when P24 holds no such request, or cannot say", async () => {
+      for (const lookup of [
+        vi.fn().mockResolvedValue({ data: { orderId: 1, refunds: [] } }),
+        vi.fn().mockRejectedValue(new Error("P24 API request failed: 404 Not Found")),
+      ]) {
+        provider["p24Api"].processRefund = vi.fn().mockRejectedValue(timedOut());
+        provider["p24Api"].getRefundsByOrderId = lookup;
+
+        await expect(provider.refundPayment(refundInput)).rejects.toThrow();
+      }
+    });
+
+    it("does not look anything up for a refund P24 refused", async () => {
+      provider["p24Api"].processRefund = vi.fn().mockRejectedValue(
+        new P24ApiError({
+          status: 400,
+          statusText: "Bad Request",
+          method: "POST",
+          endpoint: "/transaction/refund",
+          responseText: "{}",
+          secrets: [],
+        }),
+      );
+      const lookup = vi.fn();
+      provider["p24Api"].getRefundsByOrderId = lookup;
+
+      await expect(provider.refundPayment(refundInput)).rejects.toThrow();
+      expect(lookup).not.toHaveBeenCalled();
+    });
+  });
+
   it("refundPayment uses currency field when currency_code is missing", async () => {
     const mockRefund = vi.fn().mockResolvedValue({
       responseCode: 0,

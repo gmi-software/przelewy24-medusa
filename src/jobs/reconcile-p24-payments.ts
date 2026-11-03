@@ -80,13 +80,25 @@ export const resolveCursorStore = (
   const ttl = RECONCILE_MAX_AGE_HOURS * 60 * 60
   const caching = resolveOptional<{
     get: (input: { key: string }) => Promise<unknown>
-    set: (input: { key: string; data: unknown; ttl?: number }) => Promise<void>
+    set: (input: {
+      key: string
+      data: unknown
+      ttl?: number
+      options?: { autoInvalidate?: boolean }
+    }) => Promise<void>
   }>(container, Modules.CACHING)
   if (caching) {
     return {
       get: () => caching.get({ key: RECONCILE_CURSOR_KEY }),
+      // The cursor names a payment session; auto-invalidation would drop the
+      // whole state whenever that session is updated (paid, say).
       set: (state) =>
-        caching.set({ key: RECONCILE_CURSOR_KEY, data: state, ttl }),
+        caching.set({
+          key: RECONCILE_CURSOR_KEY,
+          data: state,
+          ttl,
+          options: { autoInvalidate: false },
+        }),
     }
   }
 
@@ -187,6 +199,12 @@ type ReconcileCandidate = {
 function hasRegisteredP24Transaction(
   sessionData: Record<string, unknown>,
 ): boolean {
+  // A charge whose answer never came is stamped without a token: P24 may
+  // hold a registration under the session id, so it is asked.
+  if (sessionData[P24_CHARGE_SUBMITTED_AT_KEY] != null) {
+    return true
+  }
+
   if (sessionData.pending_card_tokenization === true) {
     return false
   }
@@ -201,6 +219,12 @@ function hasRegisteredP24Transaction(
 const RECONCILE_RUN_LOCK_KEY = 'p24-reconcile:run'
 /** Longer than any run; released at the end, so it only matters on a crash. */
 const RECONCILE_RUN_LOCK_SECONDS = 15 * 60
+/**
+ * When a run stops taking sessions, so it ends inside the run lock even with
+ * P24 timing out on every call: the last one may still take a capture's
+ * worth of P24 calls (about 2.5 min) after it.
+ */
+export const RECONCILE_RUN_BUDGET_MS = 10 * 60 * 1000
 
 type RunLock = {
   acquire: (key: string, args: { ownerId: string; expire: number }) => Promise<unknown>
@@ -348,8 +372,20 @@ async function reconcileOnce(container: MedusaContainer) {
 
   let reconciled = 0
   const failed: string[] = []
+  const runStartedAt = Date.now()
 
-  for (const session of paymentSessions) {
+  for (const [index, session] of paymentSessions.entries()) {
+    // Out of time: what is left counts as failed, so the retry list and the
+    // held-back cursor below bring it into the next run.
+    if (Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS) {
+      const left = paymentSessions.slice(index).map((row) => row.id)
+      logger.warn(
+        `[p24-reconcile] Run budget spent; leaving ${left.length} session(s) for the next run`,
+      )
+      failed.push(...left)
+      break
+    }
+
     const sessionData = (session.data ?? {}) as Record<string, unknown>
 
     if (!hasRegisteredP24Transaction(sessionData)) {

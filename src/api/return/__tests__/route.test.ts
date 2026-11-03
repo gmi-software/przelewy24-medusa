@@ -10,16 +10,18 @@ function setup(
   query: Record<string, unknown>,
   providers: Record<string, unknown>,
 ) {
+  const retrieveProvider = vi.fn((providerId: string) => {
+    if (!(providerId in providers)) {
+      throw new Error(`Unable to retrieve the payment provider with id: ${providerId}`);
+    }
+    return providers[providerId];
+  });
   const paymentModule = {
+    listPaymentProviders: vi.fn(async ({ id }: { id: string[] }) =>
+      id.filter((providerId) => providerId in providers).map((providerId) => ({ id: providerId })),
+    ),
     __container__: {
-      paymentProviderService: {
-        retrieveProvider: (providerId: string) => {
-          if (!(providerId in providers)) {
-            throw new Error(`Unable to retrieve the payment provider with id: ${providerId}`);
-          }
-          return providers[providerId];
-        },
-      },
+      paymentProviderService: { retrieveProvider },
     },
   };
   const req = {
@@ -36,12 +38,29 @@ function setup(
   };
   const res = { redirect: vi.fn() };
 
-  return { req, res };
+  return { req, res, retrieveProvider };
 }
 
 describe("GET /return", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("resolves only the P24 providers the project registered", async () => {
+    const { req, res, retrieveProvider } = setup(
+      { sessionId: "payses_1", status: "ok" },
+      {
+        "pp_p24-cards_przelewy24": {
+          options: { frontend_url: "https://shop.example.com" },
+        },
+      },
+    );
+
+    await GET(req as never, res as never);
+
+    expect(retrieveProvider.mock.calls.map(([id]) => id)).toEqual([
+      "pp_p24-cards_przelewy24",
+    ]);
   });
 
   it("redirects to the provider's frontend_url with encoded query values", async () => {

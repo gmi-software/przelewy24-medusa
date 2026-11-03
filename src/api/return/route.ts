@@ -1,5 +1,5 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http";
-import { ContainerRegistrationKeys } from "@medusajs/framework/utils";
+import { ContainerRegistrationKeys, Modules } from "@medusajs/framework/utils";
 
 import { resolveP24Provider } from "../store/payments/utils/charge-helper";
 import {
@@ -7,9 +7,26 @@ import {
   PaymentProviderKeys,
 } from "../../providers/przelewy24/types";
 
+/**
+ * The P24 providers this project registered. Resolving one that is not makes
+ * Medusa log an error first, on every return.
+ */
+async function registeredProviderKeys(req: MedusaRequest): Promise<string[]> {
+  const keys = Object.values(PaymentProviderKeys);
+  try {
+    const registered = await req.scope
+      .resolve(Modules.PAYMENT)
+      .listPaymentProviders({ id: keys.map((key) => `pp_${key}_przelewy24`) });
+    const ids = new Set(registered.map((provider) => provider.id));
+    return keys.filter((key) => ids.has(`pp_${key}_przelewy24`));
+  } catch {
+    return keys;
+  }
+}
+
 /** `frontend_url` of the first registered P24 provider; env only as fallback. */
-function resolveFrontendUrl(req: MedusaRequest): string {
-  for (const providerKey of Object.values(PaymentProviderKeys)) {
+async function resolveFrontendUrl(req: MedusaRequest): Promise<string> {
+  for (const providerKey of await registeredProviderKeys(req)) {
     try {
       const frontendUrl = resolveP24Provider<{ options?: P24Options }>(
         req,
@@ -38,7 +55,7 @@ export async function GET(
   const logger = req.scope.resolve(ContainerRegistrationKeys.LOGGER);
   const sessionId = queryValue(req.query.sessionId);
   const status = queryValue(req.query.status);
-  const redirectUrl = resolveFrontendUrl(req);
+  const redirectUrl = await resolveFrontendUrl(req);
 
   try {
     logger.info(`P24 payment return: sessionId=${sessionId}, status=${status}`);
