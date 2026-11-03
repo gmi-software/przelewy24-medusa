@@ -404,6 +404,71 @@ describe("reconcileP24PaymentsJob paging", () => {
     expect(state.cursor).toEqual({ updated_at: rows[199].updated_at, id: rows[199].id });
   });
 
+  it("moves the sweep on when the row past a held cursor fails again", async () => {
+    const { container, caching, rows } = setupPages(
+      Array.from({ length: 26 }, () =>
+        Array.from({ length: 50 }, () => candidate({ id: "payses_down" })),
+      ),
+    );
+    run.mockRejectedValue(new Error("database went away"));
+
+    await reconcileP24PaymentsJob(container as any);
+    await reconcileP24PaymentsJob(container as any);
+    run.mockReset();
+    run.mockResolvedValue({});
+
+    // the second run re-read from rows[200], failed there again and moved on
+    const state = caching.set.mock.calls.at(-1)![0].data;
+    expect(state.retry).toHaveLength(200);
+    expect(state.cursor).toEqual({ updated_at: rows[1199].updated_at, id: rows[1199].id });
+  });
+
+  it("does not release the run lock under a renewal still in flight", async () => {
+    const { container } = setupPages([[candidate()]]);
+    const events: string[] = [];
+    let finishRenewal = () => {};
+    const locking = {
+      acquire: vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        // the heartbeat's renewal, still waiting when the capture returns
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolveRenewal) => {
+              finishRenewal = () => {
+                events.push("renewed");
+                resolveRenewal();
+              };
+            }),
+        )
+        .mockResolvedValue(undefined),
+      release: vi.fn(async () => {
+        events.push("release");
+        return true;
+      }),
+    };
+    const resolve = container.resolve;
+    container.resolve = (key: string) => (key === "locking" ? locking : resolve(key));
+
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      run.mockImplementationOnce(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+        return {};
+      });
+      const pending = reconcileP24PaymentsJob(container as any);
+      // real timers still run setTimeout: the renewal lands after the capture
+      setTimeout(() => finishRenewal(), 20);
+      await pending;
+    } finally {
+      run.mockReset();
+      run.mockResolvedValue({});
+      vi.useRealTimers();
+    }
+
+    expect(events).toEqual(["renewed", "release"]);
+  });
+
   it("uses this process's copy of the state while the cache cannot be read", async () => {
     const { container, graph, caching, rows } = setupPages(
       Array.from({ length: 21 }, capturedPage),
@@ -640,6 +705,24 @@ describe("reconcileP24PaymentsJob paging", () => {
     }
   });
 
+  it("still processes what it read when one read outlasts the run budget", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { container, graph } = setupPages([[candidate()]]);
+      const read = graph.getMockImplementation()!;
+      graph.mockImplementation(async (args: any) => {
+        vi.setSystemTime(Date.now() + RECONCILE_RUN_BUDGET_MS + 1);
+        return read(args);
+      });
+
+      await reconcileP24PaymentsJob(container as any);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps renewing the run lock while one capture waits on P24", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
@@ -660,6 +743,9 @@ describe("reconcileP24PaymentsJob paging", () => {
 
       // the first acquire, three heartbeats, the renewal before the state write
       expect(locking.acquire.mock.calls.length).toBeGreaterThanOrEqual(4);
+      for (const [, args] of locking.acquire.mock.calls) {
+        expect(args).toEqual(expect.objectContaining({ expire: 900 }));
+      }
     } finally {
       run.mockReset();
       run.mockResolvedValue({});

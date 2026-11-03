@@ -69,6 +69,50 @@ describe("GET /return", () => {
     }
   });
 
+  it("shares one provider lookup between returns while it is pending and after", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv("FRONTEND_URL", "https://env.example.com");
+      const { req, res } = setup({ sessionId: "payses_1", status: "ok" }, {});
+      const paymentModule = req.scope.resolve(Modules.PAYMENT) as {
+        listPaymentProviders: ReturnType<typeof vi.fn>;
+      };
+      let answer: (value: { id: string }[]) => void = () => {};
+      paymentModule.listPaymentProviders.mockReturnValueOnce(
+        new Promise((resolveLookup) => {
+          answer = resolveLookup;
+        }),
+      );
+
+      // a stalled database: both returns time out on the same query
+      const first = GET(req as never, res as never);
+      const second = GET(req as never, res as never);
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.all([first, second]);
+      answer([]);
+      await vi.advanceTimersByTimeAsync(0);
+      await GET(req as never, res as never);
+
+      expect(paymentModule.listPaymentProviders).toHaveBeenCalledTimes(1);
+      expect(res.redirect).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again once a lookup failed", async () => {
+    const { req, res } = setup({ sessionId: "payses_1", status: "ok" }, {});
+    const paymentModule = req.scope.resolve(Modules.PAYMENT) as {
+      listPaymentProviders: ReturnType<typeof vi.fn>;
+    };
+    paymentModule.listPaymentProviders.mockRejectedValueOnce(new Error("db down"));
+
+    await GET(req as never, res as never);
+    await GET(req as never, res as never);
+
+    expect(paymentModule.listPaymentProviders).toHaveBeenCalledTimes(2);
+  });
+
   it("resolves only the P24 providers the project registered", async () => {
     const { req, res, retrieveProvider } = setup(
       { sessionId: "payses_1", status: "ok" },

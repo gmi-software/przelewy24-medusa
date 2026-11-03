@@ -294,9 +294,11 @@ export default async function reconcileP24PaymentsJob(
   const lock = locking
   let renewedAt = Date.now()
   let lost = false
-  const keepLock = async (force = false) => {
-    if (lost) return false
-    if (!force && Date.now() - renewedAt < RECONCILE_LOCK_RENEW_MS) return true
+  // The renewal in flight, awaited before the release: one landing after it
+  // would take the lock again (a fresh row with locking-postgres, which no
+  // later run takes over).
+  let renewing: Promise<boolean> | null = null
+  const renew = async () => {
     try {
       await lock.acquire(RECONCILE_RUN_LOCK_KEY, {
         ownerId,
@@ -312,10 +314,22 @@ export default async function reconcileP24PaymentsJob(
       return false
     }
   }
+  const keepLock = async (force = false): Promise<boolean> => {
+    if (lost) return false
+    if (renewing) return renewing
+    if (!force && Date.now() - renewedAt < RECONCILE_LOCK_RENEW_MS) return true
+    renewing = renew().finally(() => {
+      renewing = null
+    })
+    return renewing
+  }
 
   try {
     await reconcileOnce(container, keepLock)
   } finally {
+    await renewing
+    // nothing renews past this point
+    lost = true
     await locking
       .release(RECONCILE_RUN_LOCK_KEY, { ownerId })
       .catch((error) =>
@@ -438,6 +452,10 @@ async function reconcileOnce(
     }
   }
 
+  // Reads count against the run budget up to their share only, so slow reads
+  // still leave the sessions they read most of the run.
+  const budgetStartedAt = Math.max(runStartedAt, Date.now() - RECONCILE_READ_BUDGET_MS)
+
   let reconciled = 0
   const failed: string[] = []
   // Retries left for later: first in line next run, so a few stuck ones
@@ -450,7 +468,7 @@ async function reconcileOnce(
 
     // Out of time: what is left counts as failed, so the retry list and the
     // held-back cursor below bring it into the next run.
-    if (Date.now() - runStartedAt > RECONCILE_RUN_BUDGET_MS) {
+    if (Date.now() - budgetStartedAt > RECONCILE_RUN_BUDGET_MS) {
       const left = paymentSessions.slice(index).map((row) => row.id)
       logger.warn(
         `[p24-reconcile] Run budget spent; leaving ${left.length} session(s) for the next run`,
@@ -463,7 +481,7 @@ async function reconcileOnce(
     // the sweep from newer sessions.
     if (
       retried.has(session.id) &&
-      Date.now() - runStartedAt > RECONCILE_RETRY_BUDGET_MS
+      Date.now() - budgetStartedAt > RECONCILE_RETRY_BUDGET_MS
     ) {
       deferredRetries.push(session.id)
       continue
@@ -572,21 +590,25 @@ async function reconcileOnce(
   // Failures past the retry bound stay reachable by holding the cursor just
   // before the first of them that the sweep read: the next run reads it
   // (and what follows) again instead of leaving it behind until a wrap.
+  // A hold must move the cursor: when the first row past it fails again, the
+  // sweep moves on and the rest wait for the wrap, so failing sessions never
+  // keep the sweep from the ones behind them.
   const pending = [...deferredRetries, ...failed]
   const retry = pending.slice(0, RECONCILE_MAX_RETRIES)
   const omitted = new Set(pending.slice(RECONCILE_MAX_RETRIES))
   let nextCursor = capped ? cursor : null
   if (omitted.size) {
     const firstOmitted = swept.findIndex((row) => omitted.has(row.id))
-    logger.warn(
-      `[p24-reconcile] ${pending.length} sessions left; retrying ${retry.length} directly and re-reading the sweep from the first of the rest`,
-    )
-    if (capped && firstOmitted !== -1) {
-      const before = swept[firstOmitted - 1]
-      nextCursor = before
-        ? { updated_at: toIso(before.updated_at), id: before.id }
-        : startState.cursor
+    const hold = capped && firstOmitted > 0
+    if (hold) {
+      const before = swept[firstOmitted - 1]!
+      nextCursor = { updated_at: toIso(before.updated_at), id: before.id }
     }
+    logger.warn(
+      `[p24-reconcile] ${pending.length} sessions left; retrying ${retry.length} directly and ${
+        hold ? 're-reading the sweep from the first of the rest' : 'leaving the rest for the next pass of the sweep'
+      }`,
+    )
   }
   const nextState: ReconcileState = { cursor: nextCursor, retry }
   if (

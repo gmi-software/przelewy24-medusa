@@ -8,6 +8,55 @@ import {
 } from "../../providers/przelewy24/types";
 
 const PROVIDER_LOOKUP_TIMEOUT_MS = 2000;
+/** A lookup still pending this long is given up on and the next return asks again. */
+const PROVIDER_LOOKUP_RETRY_MS = 30_000;
+
+type ProviderLookup = {
+  ids: Promise<Set<string>>;
+  startedAt: number;
+  settled: boolean;
+};
+
+/**
+ * Registered providers do not change while the app runs: one lookup per
+ * payment module, shared by concurrent returns, so a stalled database holds
+ * at most one connection for it instead of one per customer coming back.
+ */
+const providerLookups = new WeakMap<object, ProviderLookup>();
+
+function lookupProviderIds(paymentModule: {
+  listPaymentProviders: (filters: { id: string[] }) => Promise<{ id: string }[]>;
+}): Promise<Set<string>> {
+  const cached = providerLookups.get(paymentModule);
+  if (
+    cached &&
+    (cached.settled || Date.now() - cached.startedAt < PROVIDER_LOOKUP_RETRY_MS)
+  ) {
+    return cached.ids;
+  }
+
+  const lookup: ProviderLookup = {
+    startedAt: Date.now(),
+    settled: false,
+    ids: paymentModule
+      .listPaymentProviders({
+        id: Object.values(PaymentProviderKeys).map((key) => `pp_${key}_przelewy24`),
+      })
+      .then((providers) => {
+        lookup.settled = true;
+        return new Set(providers.map((provider) => provider.id));
+      })
+      .catch((error) => {
+        // failures are not kept: the next return asks again
+        if (providerLookups.get(paymentModule) === lookup) {
+          providerLookups.delete(paymentModule);
+        }
+        throw error;
+      }),
+  };
+  providerLookups.set(paymentModule, lookup);
+  return lookup.ids;
+}
 
 /**
  * The P24 providers this project registered. Resolving one that is not makes
@@ -18,10 +67,8 @@ async function registeredProviderKeys(req: MedusaRequest): Promise<string[]> {
   let timer: NodeJS.Timeout | undefined;
   try {
     // The customer is waiting on this redirect: a stuck query must not hold it.
-    const registered = await Promise.race([
-      req.scope
-        .resolve(Modules.PAYMENT)
-        .listPaymentProviders({ id: keys.map((key) => `pp_${key}_przelewy24`) }),
+    const ids = await Promise.race([
+      lookupProviderIds(req.scope.resolve(Modules.PAYMENT)),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`timed out after ${PROVIDER_LOOKUP_TIMEOUT_MS}ms`)),
@@ -29,7 +76,6 @@ async function registeredProviderKeys(req: MedusaRequest): Promise<string[]> {
         );
       }),
     ]);
-    const ids = new Set(registered.map((provider) => provider.id));
     return keys.filter((key) => ids.has(`pp_${key}_przelewy24`));
   } catch (error) {
     req.scope
